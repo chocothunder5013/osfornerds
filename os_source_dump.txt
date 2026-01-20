@@ -1,0 +1,4219 @@
+
+============================================================
+FILE PATH: ./linker.ld
+============================================================
+/* linker.ld */
+ENTRY(_start)
+
+SECTIONS
+{
+    . = 0x200000;
+
+    .text : {
+        *(.multiboot)   /* <--- This MUST be the first line inside .text */
+        *(.text)
+    }
+
+    .data : {
+        *(.data)
+    }
+
+    .bss : {
+        *(COMMON)
+        *(.bss)
+    }
+}
+
+============================================================
+FILE PATH: ./Makefile
+============================================================
+# Makefile - Final "Deep Tech" Version
+# Ensure $HOME/opt/cross/bin is in your PATH
+
+CC = i686-elf-gcc
+LD = i686-elf-ld
+NASM = nasm 
+
+# --- Compiler Flags ---
+# Kernel Flags
+CFLAGS = -m32 -ffreestanding -O2 -Wall -Wextra -Isrc -mgeneral-regs-only
+LDFLAGS = -m elf_i386 -T linker.ld
+NASMFLAGS = -f elf32
+
+# User Program Flags
+USER_CFLAGS = -m32 -ffreestanding -O2 -Wall -Wextra -Iprograms -mgeneral-regs-only
+USER_LDFLAGS = -m elf_i386 -T programs/linker.ld
+
+# --- Source Files ---
+# Kernel Sources (boot.S must be first in ASM list usually, but linker handles order)
+C_SOURCES = src/kernel/main.c \
+            src/kernel/utils.c \
+            src/drivers/serial.c \
+            src/drivers/keyboard.c \
+            src/drivers/vga.c \
+            src/cpu/gdt.c \
+            src/kernel/shell.c \
+            src/cpu/idt.c \
+            src/kernel/elf.c \
+            src/kernel/fs.c \
+            src/mm/pmm.c \
+            src/mm/vmm.c \
+            src/mm/heap.c \
+            src/drivers/graphics.c \
+            src/drivers/font.c \
+            src/drivers/mouse.c \
+            src/drivers/ata.c \
+            src/kernel/syscall.c \
+            src/kernel/process.c \
+			src/gui/wm.c
+
+ASM_SOURCES = src/kernel/boot.S \
+              src/cpu/gdt_flush.S \
+              src/cpu/isr_asm.S
+
+OBJ = $(C_SOURCES:.c=.o) $(ASM_SOURCES:.S=.o)
+
+# User Sources
+USER_OBJS = programs/entry.o programs/stdlib.o programs/hello.o
+
+# --- Main Targets ---
+
+# Default target: Build everything
+all: my-os.iso
+
+# Link the kernel
+my-kernel.elf: $(OBJ)
+	$(LD) $(LDFLAGS) -o $@ $(OBJ)
+
+# Compile Kernel C files
+%.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
+# Assemble Kernel NASM files
+%.o: %.S
+	$(NASM) $(NASMFLAGS) $< -o $@
+
+# --- User Programs ---
+
+# 1. Assemble entry.S
+programs/entry.o: programs/entry.S
+	$(NASM) -f elf32 programs/entry.S -o programs/entry.o
+
+# 2. Compile stdlib
+programs/stdlib.o: programs/stdlib.c
+	$(CC) $(USER_CFLAGS) -c programs/stdlib.c -o programs/stdlib.o
+
+# 3. Compile hello.c
+programs/hello.o: programs/hello.c
+	$(CC) $(USER_CFLAGS) -c programs/hello.c -o programs/hello.o
+
+# 4. Link hello.elf
+hello.elf: $(USER_OBJS) programs/linker.ld
+	$(LD) $(USER_LDFLAGS) -o hello.elf programs/entry.o programs/stdlib.o programs/hello.o
+
+# 5. Compile & Link echo.elf
+programs/echo.o: programs/echo.c
+	$(CC) $(USER_CFLAGS) -c programs/echo.c -o programs/echo.o
+
+echo.elf: programs/echo.o programs/entry.o programs/stdlib.o programs/linker.ld
+	$(LD) $(USER_LDFLAGS) -o echo.elf programs/entry.o programs/stdlib.o programs/echo.o
+
+# --- Image Creation ---
+
+# Get Limine (Only clone if not exists)
+limine:
+	git clone https://github.com/limine-bootloader/limine.git --branch=v8.x-binary --depth=1
+	make -C limine
+
+# Create Disk Image (for persistence)
+disk.img:
+	dd if=/dev/zero of=disk.img bs=1M count=10
+
+# Create ISO
+my-os.iso: my-kernel.elf limine hello.elf echo.elf
+	rm -rf iso_root
+	mkdir -p iso_root
+	cp my-kernel.elf iso_root/
+	# Create a test text file
+	echo "Hello from the filesystem! This text is loaded from disk." > iso_root/test.txt
+	# Copy Config and Programs
+	cp limine.conf iso_root/
+	cp hello.elf iso_root/
+	cp echo.elf iso_root/
+	# Install Limine
+	cp limine/limine-bios.sys limine/limine-bios-cd.bin limine/limine-uefi-cd.bin iso_root/
+	xorriso -as mkisofs -b limine-bios-cd.bin \
+		-no-emul-boot -boot-load-size 4 -boot-info-table \
+		--efi-boot limine-uefi-cd.bin \
+		-efi-boot-part --efi-boot-image --protective-msdos-label \
+		iso_root -o my-os.iso
+	./limine/limine bios-install my-os.iso
+
+# --- Run ---
+
+run: my-os.iso disk.img
+	qemu-system-i386 -cdrom my-os.iso -drive file=disk.img,format=raw,index=0,media=disk -serial stdio -no-reboot -no-shutdown
+
+clean:
+	rm -rf src/**/*.o src/kernel/*.o src/cpu/*.o src/drivers/*.o src/mm/*.o
+	rm -rf programs/*.o
+	rm -rf *.elf *.iso iso_root limine disk.img
+
+============================================================
+FILE PATH: ./limine.cfg
+============================================================
+TIMEOUT=0
+VERBOSE=yes
+
+/My OS
+    PROTOCOL=multiboot1
+    KERNEL_PATH=boot:///my-kernel.elf
+
+============================================================
+FILE PATH: ./limine.conf
+============================================================
+timeout: 5
+
+/My OS
+    protocol: multiboot1
+    kernel_path: boot():/my-kernel.elf
+    module_path: boot():/hello.elf
+    module_path: boot():/echo.elf
+
+============================================================
+FILE PATH: ./programs/memtest.c
+============================================================
+#include "stdlib.h"
+
+int main() {
+    print("\n--- Memory Test ---\n");
+
+    print("Allocating 1 KB...\n");
+    char* buffer = (char*)malloc(1024);
+    
+    if (buffer == 0) {
+        print("Malloc failed!\n");
+        return 1;
+    }
+    
+    // Write to it
+    for(int i=0; i<1024; i++) buffer[i] = 'A';
+    buffer[1023] = 0;
+    
+    print("Write success. Reading start: ");
+    char temp[2] = {buffer[0], 0};
+    print(temp); // Should be 'A'
+    print("\n");
+
+    print("Freeing...\n");
+    free(buffer);
+
+    print("Allocating 50 KB (Force sbrk expansion)...\n");
+    // This will force the kernel to map NEW pages
+    char* big_buf = (char*)malloc(50 * 1024);
+    if(big_buf) print("Success!\n");
+    else print("Failed!\n");
+
+    print("-------------------\n");
+    return 0;
+}
+
+============================================================
+FILE PATH: ./programs/date.c
+============================================================
+#include "stdlib.h"
+
+void print_int(int n) {
+    if (n == 0) { print("0"); return; }
+    char buf[12];
+    int i = 10;
+    buf[11] = 0;
+    while (n > 0) {
+        buf[i--] = (n % 10) + '0';
+        n /= 10;
+    }
+    print(&buf[i + 1]);
+}
+
+#include "stdlib.h"
+
+int main() {
+    time_t t;
+    get_time(&t);
+    
+    print("\nCurrent System Time:\n");
+    
+    print("20"); 
+    print_int(t.year - 2000); 
+    print("/"); 
+    print_int(t.month);
+    print("/");
+    print_int(t.day);
+    print("  ");
+    print_int(t.hour);
+    print(":");
+    print_int(t.minute);
+    
+    print("\n");
+    return 0;
+}
+
+============================================================
+FILE PATH: ./programs/ls.c
+============================================================
+#include "stdlib.h"
+
+int main() {
+    char name[32];
+    int idx = 0;
+
+    print("\n--- Files ---\n"); // printf -> print
+    while (readdir(idx, name) == 1) {
+        print(" - ");
+        print(name);
+        print("\n");
+        idx++;
+    }
+    print("-------------\n");
+    return 0;
+}
+
+============================================================
+FILE PATH: ./programs/stdlib.h
+============================================================
+#ifndef STDLIB_H
+#define STDLIB_H
+
+#include <stdint.h> // Ensure types are available
+
+void* malloc(int size);
+void free(void* ptr);
+int open(const char* filename);
+void close(int fd);
+int read(int fd, char* buf, int size);
+int write(int fd, char* buf, int size); // Add write
+int seek(int fd, int offset, int whence); // Add seek
+int readdir(int index, char* buf);
+void unlink(const char* filename); // Add unlink (delete)
+void print_int(int n);
+
+void print(const char* msg);
+void printf(const char* fmt, ...); // Add printf prototype (we'll implement a dummy one or use print)
+void yield();
+char get_char();
+void exit(int code);
+int strlen(const char* str);
+void clear_screen(); // Add clear_screen
+
+// Time struct
+typedef struct {
+    uint8_t second; uint8_t minute; uint8_t hour;
+    uint8_t day;    uint8_t month;  uint16_t year;
+} time_t;
+
+void get_time(time_t* t);
+
+#endif
+
+============================================================
+FILE PATH: ./programs/echo.c
+============================================================
+#include "stdlib.h"
+
+int main(int argc, char** argv) {
+    // Phase 6: Standard C parsing
+    
+    for (int i = 1; i < argc; i++) {
+        print(argv[i]); // Changed printf -> print
+        print(" ");
+    }
+    print("\n");
+    return 0;
+}
+
+============================================================
+FILE PATH: ./programs/stdlib.c
+============================================================
+/* programs/stdlib.c */
+#include "stdlib.h"
+#include <stdint.h>
+#include <stdarg.h> // GCC builtin for varargs
+
+// --- System Call Wrappers ---
+
+// 0: PRINT
+void print(const char* msg) {
+    __asm__ volatile ("int $0x80" : : "a" (0), "b" (msg)); 
+}
+
+// 1: YIELD
+void yield() {
+    __asm__ volatile ("int $0x80" : : "a" (1)); 
+}
+
+// 2: READ CHAR
+char get_char() {
+    char c;
+    __asm__ volatile ("int $0x80" : "=a" (c) : "a" (2)); 
+    return c;
+}
+
+// 3: EXIT
+void exit(int code) {
+    __asm__ volatile ("int $0x80" : : "a" (3), "b"(code)); 
+    while(1);
+}
+
+// 5: OPEN
+int open(const char* filename) {
+    int ret;
+    __asm__ volatile ("int $0x80" : "=a"(ret) : "a"(5), "b"(filename));
+    return ret;
+}
+
+// 6: CLOSE
+void close(int fd) {
+    __asm__ volatile ("int $0x80" : : "a"(6), "b"(fd));
+}
+
+// 7: READ
+int read(int fd, char* buf, int size) {
+    int ret;
+    __asm__ volatile ("int $0x80" : "=a"(ret) : "a"(7), "b"(fd), "c"(buf), "d"(size));
+    return ret;
+}
+
+// 8: READDIR
+int readdir(int index, char* buf) {
+    int ret;
+    __asm__ volatile ("int $0x80" : "=a"(ret) : "a"(8), "b"(index), "c"(buf));
+    return ret;
+}
+
+// 9: SBRK
+void* sbrk(int incr) {
+    int ret;
+    __asm__ volatile ("int $0x80" : "=a"(ret) : "a"(9), "b"(incr));
+    return (void*)ret;
+}
+
+// 10: TIME
+void get_time(time_t* t) {
+    __asm__ volatile ("int $0x80" : : "a"(10), "b"(t));
+}
+
+// 11: WRITE
+int write(int fd, char* buf, int size) {
+    int ret;
+    __asm__ volatile ("int $0x80" : "=a"(ret) : "a"(11), "b"(fd), "c"(buf), "d"(size));
+    return ret;
+}
+
+// 12: SEEK
+int seek(int fd, int offset, int whence) {
+    int ret;
+    __asm__ volatile ("int $0x80" : "=a"(ret) : "a"(12), "b"(fd), "c"(offset), "d"(whence));
+    return ret;
+}
+
+// 13: CLEAR SCREEN
+void clear_screen() {
+    __asm__ volatile ("int $0x80" : : "a"(13));
+}
+
+// 14: UNLINK
+void unlink(const char* filename) {
+    __asm__ volatile ("int $0x80" : : "a"(14), "b"(filename)); 
+}
+
+// --- Utils & String Functions ---
+
+int strlen(const char* str) {
+    int len = 0;
+    while(str[len]) len++;
+    return len;
+}
+
+void* memset(void* ptr, int value, int num) {
+    unsigned char* p = (unsigned char*)ptr;
+    while(num--) *p++ = (unsigned char)value;
+    return ptr;
+}
+
+void* memcpy(void* dest, const void* src, int num) {
+    char* d = (char*)dest;
+    const char* s = (const char*)src;
+    while(num--) *d++ = *s++;
+    return dest;
+}
+
+// --- Printf Implementation ---
+
+void print_int(int n) {
+    if (n == 0) { print("0"); return; }
+    if (n < 0) { print("-"); n = -n; }
+    
+    char buffer[12];
+    int i = 10;
+    buffer[11] = 0;
+    
+    while (n > 0) {
+        buffer[i--] = (n % 10) + '0';
+        n /= 10;
+    }
+    print(&buffer[i + 1]);
+}
+
+void print_hex(unsigned int n) {
+    char hex_chars[] = "0123456789ABCDEF";
+    char buffer[11];
+    buffer[0] = '0'; buffer[1] = 'x'; buffer[10] = 0;
+    for(int i=0; i<8; i++) {
+        buffer[9-i] = hex_chars[n & 0xF];
+        n >>= 4;
+    }
+    print(buffer);
+}
+
+void printf(const char* fmt, ...) {
+    __builtin_va_list args;
+    __builtin_va_start(args, fmt);
+
+    for (int i = 0; fmt[i] != 0; i++) {
+        if (fmt[i] == '%') {
+            i++;
+            if (fmt[i] == 's') {
+                char* s = __builtin_va_arg(args, char*);
+                print(s ? s : "(null)");
+            }
+            else if (fmt[i] == 'd') {
+                int d = __builtin_va_arg(args, int);
+                print_int(d);
+            }
+            else if (fmt[i] == 'x') {
+                unsigned int x = __builtin_va_arg(args, unsigned int);
+                print_hex(x);
+            }
+            else if (fmt[i] == 'c') {
+                char c = (char)__builtin_va_arg(args, int);
+                char temp[2] = {c, 0};
+                print(temp);
+            }
+            else {
+                char temp[2] = {fmt[i], 0};
+                print(temp);
+            }
+        } else {
+            char temp[2] = {fmt[i], 0};
+            print(temp);
+        }
+    }
+    __builtin_va_end(args);
+}
+
+// --- Malloc (Simple Linked List) ---
+
+typedef struct block_meta {
+    int size;
+    struct block_meta* next;
+    int free;
+    int magic;
+} block_meta_t;
+
+#define META_SIZE sizeof(block_meta_t)
+void* global_base = 0;
+
+block_meta_t* find_free_block(block_meta_t** last, int size) {
+    block_meta_t* current = global_base;
+    while (current && !(current->free && current->size >= size)) {
+        *last = current;
+        current = current->next;
+    }
+    return current;
+}
+
+block_meta_t* request_space(block_meta_t* last, int size) {
+    block_meta_t* block = (block_meta_t*)sbrk(0);
+    void* request = sbrk(size + META_SIZE);
+    
+    if (request == (void*)-1) return 0;
+
+    if (last) last->next = block;
+    block->size = size;
+    block->next = 0;
+    block->free = 0;
+    block->magic = 0x12345678;
+    return block;
+}
+
+void* malloc(int size) {
+    if (size <= 0) return 0;
+    block_meta_t* block;
+    
+    if (!global_base) {
+        block = request_space(0, size);
+        if (!block) return 0;
+        global_base = block;
+    } else {
+        block_meta_t* last = global_base;
+        block = find_free_block(&last, size);
+        if (!block) {
+            block = request_space(last, size);
+            if (!block) return 0;
+        } else {
+            block->free = 0;
+            block->magic = 0x77777777;
+        }
+    }
+    return (void*)(block + 1);
+}
+
+void free(void* ptr) {
+    if (!ptr) return;
+    block_meta_t* block = (block_meta_t*)ptr - 1;
+    if (block->magic == 0x12345678 || block->magic == 0x77777777) {
+        block->free = 1;
+    }
+}
+
+============================================================
+FILE PATH: ./programs/kedit.c
+============================================================
+/* programs/kedit.c */
+#include "stdlib.h"
+
+#define MAX_BUFFER 4096 
+
+char* file_buffer;
+int buffer_size = 0;
+int cursor_pos = 0;
+char* filename;
+
+void draw_ui() {
+    clear_screen();
+    print("--- KEDIT: %s (Ctrl+S/tilde to Save, Ctrl+Q/backtick to Quit) ---\n\n", filename);
+    for(int i=0; i <= buffer_size; i++) {
+        if (i == cursor_pos) print("|");
+        if (i < buffer_size) {
+            char c[2] = {file_buffer[i], 0};
+            print(c);
+        }
+    }
+    print("\n\n------------------------------\n");
+}
+
+void save_file() {
+    print("\nSaving...");
+
+    // FIX: Do NOT delete the file immediately.
+    // Try to open it. If it fails (doesn't exist), open should probably create it
+    // or we use a separate create call.
+    
+    // In your specific FS (flat), we can try to unlink ONLY if we know we are ready to write.
+    // But safer: Open, Write.
+    // Note: To handle shrinking files, we really should unlink OLD, then create NEW.
+    // BUT we must do it carefully.
+    
+    // 1. Delete old version (Risky but necessary for your specific FS implementation 
+    //    until you add O_TRUNC support to sys_open)
+    unlink(filename);
+    
+    // 2. Create/Open new
+    int fd = open(filename);
+    
+    // If open failed (because unlink removed it and open didn't auto-create?), try touch first.
+    // Your sys_open currently doesn't auto-create.
+    if (fd == -1) {
+        // We have to rely on shell/fs logic to create it? 
+        // Or we assume the OS has a 'create' syscall?
+        // Your FS code implies sys_open fails if file missing.
+        // So we must manually create it via a hack or specific syscall?
+        // Wait, your 'fs_write' in kernel handles creation? No.
+        
+        // Let's use the standard flow your shell uses: 'touch' logic isn't exposed as syscall.
+        // We will assume open() needs to be fixed to O_CREAT in kernel, OR we just fail here.
+        
+        // Fallback: Since we unlinked, we are committed. 
+        // Ideally we need a 'creat' syscall.
+        // Assuming your updated kernel maps 'touch' logic or open(O_CREAT).
+        // For now, let's just error out if we can't open.
+        print(" Error: Could not reopen file!");
+        return;
+    }
+    
+    seek(fd, 0, 0);
+    write(fd, file_buffer, buffer_size);
+    close(fd);
+    print(" Done!");
+}
+
+int main(int argc, char** argv) {
+    if (argc < 2) {
+        print("Usage: kedit <filename>\n");
+        return 1;
+    }
+    filename = argv[1];
+
+    file_buffer = (char*)malloc(MAX_BUFFER);
+    if (!file_buffer) return 1;
+
+    int fd = open(filename);
+    if (fd != -1) {
+        buffer_size = read(fd, file_buffer, MAX_BUFFER);
+        close(fd);
+    } else {
+        // New file
+        buffer_size = 0;
+    }
+
+    while(1) {
+        draw_ui();
+        char c = get_char();
+        if (c == '`') break; // Quit
+        if (c == '~') { save_file(); get_char(); continue; } // Save
+
+        if (c == '\b') {
+            if (cursor_pos > 0) {
+                for(int i=cursor_pos; i<buffer_size; i++) file_buffer[i-1] = file_buffer[i];
+                buffer_size--;
+                cursor_pos--;
+            }
+        }
+        else if (buffer_size < MAX_BUFFER - 1 && c >= 32 && c <= 126) {
+            for(int i=buffer_size; i>cursor_pos; i--) file_buffer[i] = file_buffer[i-1];
+            file_buffer[cursor_pos] = c;
+            buffer_size++;
+            cursor_pos++;
+        }
+        else if (c == '\n') {
+            if (buffer_size < MAX_BUFFER - 1) {
+                for(int i=buffer_size; i>cursor_pos; i--) file_buffer[i] = file_buffer[i-1];
+                file_buffer[cursor_pos] = '\n';
+                buffer_size++;
+                cursor_pos++;
+            }
+        }
+    }
+    
+    free(file_buffer);
+    clear_screen();
+    return 0;
+}
+
+============================================================
+FILE PATH: ./programs/cat.c
+============================================================
+#include "stdlib.h"
+
+int main(char* args) {
+    if (!args) {
+        print("Usage: cat <filename>\n");
+        return 1;
+    }
+
+    int fd = open(args);
+    if (fd == -1) {
+        print("Error: File not found.\n");
+        return 1;
+    }
+
+    char buf[64]; // Small buffer to test chunking
+    int bytes;
+    
+    print("\n");
+    while ((bytes = read(fd, buf, 63)) > 0) {
+        buf[bytes] = 0; // Null terminate
+        print(buf);
+    }
+    print("\n");
+
+    close(fd);
+    return 0;
+}
+
+============================================================
+FILE PATH: ./programs/entry.S
+============================================================
+; programs/entry.S
+global _start
+extern main
+extern exit
+
+_start:
+    ; Stack is already set up by the kernel at 0xBFFFF000
+    
+    ; Push argc, argv (We don't support them yet, push 0)
+    push 0 ; argv
+    push 0 ; argc
+    
+    call main
+    
+    ; If main returns, call exit
+    push eax
+    call exit
+    hlt
+
+============================================================
+FILE PATH: ./programs/linker.ld
+============================================================
+ENTRY(_start)
+SECTIONS
+{
+    /* Was 0x400000, changed to 256MB to avoid Kernel collision */
+    . = 0x10000000; 
+    
+    .text : { *(.text) }
+    .data : { *(.data) }
+    .bss  : { *(.bss)  }
+}
+
+============================================================
+FILE PATH: ./programs/hello.c
+============================================================
+#include "stdlib.h"
+
+int main() {
+    print("\n==============================\n");
+    print("      The Runtime Works!      \n");
+    print("==============================\n");
+    
+    print("Type something (q to quit):\n");
+
+    while(1) {
+        char c = get_char();
+        if (c == 'q') {
+            break; // Break loop to exit
+        }
+        if (c != 0) {
+            char temp[2] = {c, 0};
+            print(temp); // Echo back
+        }
+    }
+
+    print("\nGoodbye from User Space!\n");
+    return 0; // This will trigger entry.S to call exit()
+}
+
+============================================================
+FILE PATH: ./src/kernel/process.c
+============================================================
+/* src/kernel/process.c */
+#include "process.h"
+#include "../mm/heap.h"
+#include "../cpu/gdt.h"
+#include "fs.h"
+#include "../mm/vmm.h"
+
+extern struct file_node* fs_root;
+extern void switch_task(uint32_t *old_esp_ptr, uint32_t new_esp);
+extern void pmm_free_block(void* p);
+extern void* pmm_alloc_block();
+extern void term_print(const char* str);
+extern void tss_set_stack(uint32_t ss, uint32_t esp);
+extern void jump_to_user();
+extern void vmm_free_address_space(page_directory_t* pd);
+extern void set_cr3(uint32_t pd);
+extern uint32_t get_cr3();
+
+extern page_directory_t* vmm_create_address_space();
+extern void vmm_map_page_in_dir(page_directory_t* pd, void* phys, void* virt, int flags);
+
+process_t* current_process = 0;
+process_t* ready_queue = 0;
+int next_pid = 1;
+
+typedef struct page_node {
+    void* phys_addr;
+    void* virt_addr;
+    struct page_node* next;
+} page_node_t;
+
+void init_multitasking() {
+    current_process = (process_t*)kmalloc(sizeof(process_t));
+    current_process->pid = 0;
+    current_process->state = PROCESS_READY;
+    current_process->cwd = fs_root;
+    current_process->cr3 = get_cr3(); 
+    current_process->allocated_pages = 0;
+    
+    current_process->kernel_stack_ptr = kmalloc(4096);
+    
+    ready_queue = current_process;
+    current_process->next = current_process; 
+
+    term_print(" [SCHED] Multitasking Initialized.\n");
+}
+
+void process_track_page(process_t* proc, void* phys, void* virt) {
+    if (!proc) return;
+    page_node_t* node = (page_node_t*)kmalloc(sizeof(page_node_t));
+    node->phys_addr = phys;
+    node->virt_addr = virt;
+    node->next = proc->allocated_pages;
+    proc->allocated_pages = node;
+}
+
+// UPDATED: Handles is_kernel flag
+int create_process(void (*entry_point)(), char* args, uint32_t initial_break, int is_kernel) {
+    process_t* new_proc = (process_t*)kmalloc(sizeof(process_t));
+    
+    new_proc->pid = next_pid++;
+    new_proc->parent_pid = current_process ? current_process->pid : 0;
+    new_proc->state = PROCESS_READY;
+    new_proc->cwd = current_process ? current_process->cwd : fs_root;
+    new_proc->program_break = initial_break;
+    new_proc->allocated_pages = 0;
+
+    // 1. Setup Address Space
+    // Kernel threads share the kernel directory. User processes get a new one.
+    if (is_kernel) {
+        new_proc->cr3 = get_cr3(); // Reuse current kernel directory
+    } else {
+        page_directory_t* new_pd = vmm_create_address_space();
+        new_proc->cr3 = (uint32_t)new_pd;
+    }
+
+    // 2. Allocate Kernel Stack
+    new_proc->kernel_stack_ptr = kmalloc(4096);
+    uint32_t ks_top = (uint32_t)new_proc->kernel_stack_ptr + 4096;
+    uint32_t* sp = (uint32_t*)ks_top;
+
+    // 3. User Stack (Only for User Processes)
+    if (!is_kernel) {
+        void* stack_phys = pmm_alloc_block();
+        // Map User Stack (0x7 = User | RW)
+        vmm_map_page_in_dir((page_directory_t*)new_proc->cr3, stack_phys, (void*)(USER_STACK_TOP - 4096), 0x7);
+        
+        // --- RING 3 IRET FRAME (5 Values) ---
+        *(--sp) = 0x23;             // SS (User Data)
+        *(--sp) = USER_STACK_TOP;   // ESP (User Stack)
+        *(--sp) = 0x202;            // EFLAGS (Interrupts Enabled)
+        *(--sp) = 0x1B;             // CS (User Code)
+        *(--sp) = (uint32_t)entry_point; // EIP
+    } else {
+        // --- RING 0 IRET FRAME (3 Values) ---
+        // IRET only pops CS/EIP/EFLAGS when returning to the same privilege level
+        *(--sp) = 0x202;            // EFLAGS
+        *(--sp) = 0x08;             // CS (Kernel Code)
+        *(--sp) = (uint32_t)entry_point; // EIP
+    }
+
+    // B. The switch_task Frame
+    *(--sp) = (uint32_t)jump_to_user; // Return Address (trampoline)
+
+    *(--sp) = 0x202;    // EFLAGS
+    *(--sp) = 0x08;     // CS
+    *(--sp) = 0;        // Error Code
+
+    // Registers
+    *(--sp) = 0; // EDI
+    *(--sp) = 0; // ESI
+    *(--sp) = 0; // EBP
+    *(--sp) = 0; // ESP
+    *(--sp) = 0; // EBX
+    *(--sp) = 0; // EDX
+    *(--sp) = 0; // ECX
+    *(--sp) = 0; // EAX
+
+    // Segments
+    *(--sp) = 0x10; // DS (Kernel Data)
+    *(--sp) = 0x10; // ES
+    *(--sp) = 0x10; // FS
+    *(--sp) = 0x10; // GS
+
+    new_proc->esp = (uint32_t)sp;
+    
+    // Add to Ready Queue
+    process_t* last = ready_queue;
+    while (last->next != ready_queue) last = last->next;
+    last->next = new_proc;
+    new_proc->next = ready_queue;
+    
+    return new_proc->pid;
+}
+
+void schedule() {
+    __asm__ volatile("cli");
+    
+    if (!current_process) { __asm__ volatile("sti"); return; }
+
+    process_t* next_proc = current_process->next;
+    
+    while ((next_proc->state != PROCESS_READY) && next_proc != current_process) {
+        next_proc = next_proc->next;
+    }
+
+    if (next_proc == current_process && next_proc->state != PROCESS_READY) {
+        __asm__ volatile("sti");
+        __asm__ volatile("hlt"); 
+        return;
+    }
+
+    process_t* prev_proc = current_process;
+    current_process = next_proc;
+    
+    if (current_process->cr3 != prev_proc->cr3) {
+        set_cr3(current_process->cr3);
+    }
+    
+    tss_set_stack(0x10, (uint32_t)current_process->kernel_stack_ptr + 4096);
+    switch_task(&(prev_proc->esp), current_process->esp);
+    __asm__ volatile("sti");
+}
+
+void process_exit(int code) {
+    __asm__ volatile("cli");
+    
+    // Prevent killing init (pid 0) or shell (pid 1) carelessly for now
+    if (current_process->pid <= 1) { 
+        __asm__ volatile("sti"); 
+        return;
+    } 
+
+    kfree(current_process->kernel_stack_ptr);
+    
+    // FIX: Free the address space!
+    // We can't free the CURRENT directory while we are using it.
+    // However, since we are becoming a ZOMBIE, we will switch away shortly.
+    // Real OSs free this in the reaper/wait function.
+    // For simplicity in this OS: We mark it, and the PARENT or SCHEDULER should free it.
+    // BUT, since we don't have a complex reaper, let's free the USER PAGES now, 
+    // but keep the directory struct until the task is fully removed from queue.
+    
+    // Actually, safest approach for this OS structure:
+    // Only free if we are not sharing the kernel directory (is_kernel checks)
+    if (current_process->cr3 != get_cr3()) { 
+         // If we are running on this CR3, we must be careful. 
+         // Usually, we switch to kernel_cr3 before dying.
+         // Let's assume the Scheduler handles the CR3 switch.
+         
+         // Helper: We simply flag it. The actual free should happen when the parent waits.
+         // But to stop the leak NOW without complex logic:
+         vmm_free_address_space((page_directory_t*)current_process->cr3);
+    }
+    
+    current_process->state = PROCESS_ZOMBIE;
+    current_process->exit_code = code;
+    
+    process_unblock(current_process->pid); 
+    
+    schedule();
+}
+
+void process_block(int reason) {
+    current_process->state = PROCESS_BLOCKED;
+    current_process->wait_reason = reason;
+    schedule();
+}
+
+void process_unblock(int reason) {
+    process_t* node = ready_queue;
+    do {
+        if (node->state == PROCESS_BLOCKED && node->wait_reason == reason) {
+            node->state = PROCESS_READY;
+            node->wait_reason = 0;
+            return; 
+        }
+        node = node->next;
+    } while (node != ready_queue);
+}
+
+int process_wait(int pid, int* status_ptr) {
+    while(1) {
+        process_t* child = 0;
+        process_t* it = ready_queue;
+        do {
+            if (it->pid == pid || (pid == -1 && it->parent_pid == current_process->pid)) {
+                child = it;
+                break;
+            }
+            it = it->next;
+        } while (it != ready_queue);
+        
+        if (!child) return -1; 
+        
+        if (child->state == PROCESS_ZOMBIE) {
+            if (status_ptr) *status_ptr = child->exit_code;
+            
+            process_t* prev = ready_queue;
+            while (prev->next != child) prev = prev->next;
+            prev->next = child->next;
+            if (ready_queue == child) ready_queue = child->next;
+            
+            return child->pid;
+        }
+        process_block(child->pid); 
+    }
+}
+
+============================================================
+FILE PATH: ./src/kernel/elf.h
+============================================================
+#ifndef ELF_H
+#define ELF_H
+
+#include <stdint.h>
+
+// ELF Magic Numbers
+#define ELF_MAGIC 0x464C457F  // "\x7FELF" in little endian
+
+// Program Header Type
+#define PT_LOAD 1
+
+typedef struct {
+    uint32_t magic;      // 0x7F 'E' 'L' 'F'
+    uint8_t  class;      // 1 = 32-bit
+    uint8_t  endian;     // 1 = Little Endian
+    uint8_t  hdr_version;// Header Version
+    uint8_t  abi;        // 0 = System V
+    uint8_t  abi_version;
+    uint8_t  pad[7];
+    uint16_t type;       // 2 = Executable
+    uint16_t machine;    // 3 = x86
+    uint32_t version;
+    uint32_t entry;      // Entry point address
+    uint32_t phoff;      // Program Header Offset
+    uint32_t shoff;      // Section Header Offset
+    uint32_t flags;
+    uint16_t hsize;      // Header Size
+    uint16_t phentsize;  // Program Header Entry Size
+    uint16_t phnum;      // Program Header Count
+    uint16_t shentsize;
+    uint16_t shnum;
+    uint16_t shstrndx;
+} elf_header_t;
+
+typedef struct {
+    uint32_t type;       // 1 = LOAD
+    uint32_t offset;     // Offset in file
+    uint32_t vaddr;      // Virtual Address in memory
+    uint32_t paddr;
+    uint32_t filesz;     // Size in file
+    uint32_t memsz;      // Size in memory (if memsz > filesz, zero fill the difference)
+    uint32_t flags;      // R/W/X
+    uint32_t align;
+} elf_program_header_t;
+
+// Function prototype
+int elf_load_file(const char* filename, char* args);
+
+#endif
+
+============================================================
+FILE PATH: ./src/kernel/fs.h
+============================================================
+#ifndef FS_H
+#define FS_H
+
+#include <stdint.h>
+
+// Struct Definitions
+typedef struct file_node {
+    char name[32];
+    char* data;
+    uint32_t size;
+    uint8_t flags;
+    struct file_node* parent;
+    struct file_node* children;
+    struct file_node* next;
+} file_t;
+
+extern file_t* fs_root; // Extern declaration
+
+// Function Prototypes
+void init_fs(void* mboot_ptr); // Use void* to avoid circular include dep
+file_t* fs_resolve_path(const char* path);
+void fs_delete(const char* name);
+// ... Add prototypes for fs_read, fs_write, etc.
+
+#endif
+
+============================================================
+FILE PATH: ./src/kernel/elf.c
+============================================================
+/* src/kernel/elf.c */
+#include "elf.h"
+#include "../mm/heap.h"
+#include "../mm/vmm.h"
+#include "process.h"
+
+extern void term_print(const char* str);
+extern void* pmm_alloc_block();
+extern void set_cr3(uint32_t pd);
+extern uint32_t get_cr3();
+
+typedef struct file_node {
+    char name[32];
+    char* data;         
+    uint32_t size;
+    struct file_node* next; 
+} file_t;
+extern file_t* fs_resolve_path(const char* path);
+
+extern page_directory_t* vmm_create_address_space();
+extern void vmm_map_page_in_dir(page_directory_t* pd, void* phys, void* virt, int flags);
+
+void* memcpy(void* dest, const void* src, uint32_t n) {
+    char* d = (char*)dest;
+    const char* s = (const char*)src;
+    while(n--) *d++ = *s++;
+    return dest;
+}
+
+void* memset(void* ptr, int value, uint32_t num) {
+    unsigned char* p = (unsigned char*)ptr;
+    while(num--) *p++ = (unsigned char)value;
+    return ptr;
+}
+
+int elf_load_file(const char* filename, char* args) {
+    file_t* f = fs_resolve_path(filename);
+    if (!f) {
+        term_print("ELF: File not found.\n");
+        return -1;
+    }
+
+    elf_header_t* hdr = (elf_header_t*)f->data;
+    if (hdr->magic != ELF_MAGIC) {
+        term_print("ELF: Not a valid ELF file.\n");
+        return -1;
+    }
+
+    term_print("ELF: Loading "); term_print(filename); term_print("\n");
+
+    page_directory_t* new_pd = vmm_create_address_space();
+    if (!new_pd) return -1;
+
+    uint32_t highest_addr = 0;
+    uint32_t old_cr3 = get_cr3();
+    
+    __asm__ volatile("cli");
+    set_cr3((uint32_t)new_pd); 
+
+    elf_program_header_t* ph = (elf_program_header_t*)(f->data + hdr->phoff);
+    for (int i = 0; i < hdr->phnum; i++) {
+        if (ph[i].type == PT_LOAD) {
+            uint32_t memsz = ph[i].memsz;
+            uint32_t filesz = ph[i].filesz;
+            uint32_t vaddr = ph[i].vaddr;
+            uint32_t offset = ph[i].offset;
+
+            uint32_t base_addr = vaddr & 0xFFFFF000;
+            uint32_t end_addr = vaddr + memsz;
+            uint32_t page_count = (end_addr - base_addr + 4095) / 4096;
+
+            for (uint32_t z = 0; z < page_count; z++) {
+                void* frame = pmm_alloc_block();
+                vmm_map_page_in_dir(new_pd, frame, (void*)(base_addr + (z * 4096)), 0x7);
+            }
+            
+            if (memsz > filesz) {
+                memset((void*)(vaddr + filesz), 0, memsz - filesz);
+            }
+            memcpy((void*)vaddr, (void*)(f->data + offset), filesz);
+
+            if (end_addr > highest_addr) highest_addr = end_addr;
+        }
+    }
+
+    set_cr3(old_cr3);
+    __asm__ volatile("sti");
+
+    if (highest_addr % 4096 != 0) {
+        highest_addr = (highest_addr & 0xFFFFF000) + 4096;
+    }
+
+    term_print("ELF: Executing...\n");
+    
+    // PASS 0 for is_kernel (User Mode)
+    return create_process((void (*)())hdr->entry, args, highest_addr, 0);
+}
+
+============================================================
+FILE PATH: ./src/kernel/boot.S
+============================================================
+; src/kernel/boot.S
+MBALIGN  equ  1 << 0
+MEMINFO  equ  1 << 1
+VIDEO    equ  1 << 2  ; <--- NEW: Request Video Mode
+FLAGS    equ  MBALIGN | MEMINFO | VIDEO
+MAGIC    equ  0x1BADB002
+CHECKSUM equ -(MAGIC + FLAGS)
+
+section .multiboot
+align 4
+    dd MAGIC
+    dd FLAGS
+    dd CHECKSUM
+    dd 0, 0, 0, 0, 0 ; Header Address fields (unused if not generic)
+    
+    ; --- NEW: Video Request Fields ---
+    dd 0             ; Mode Type (0 = Linear Graphics)
+    dd 1024          ; Width
+    dd 768           ; Height
+    dd 32            ; Depth (Bits per pixel)
+
+section .bss
+align 16
+stack_bottom:
+    resb 16384
+stack_top:
+
+section .text
+global _start
+extern kmain
+
+_start:
+    mov esp, stack_top
+    push ebx ; Push Multiboot Info Struct pointer
+    cli
+    call kmain
+.hang:
+    hlt
+    jmp .hang
+
+============================================================
+FILE PATH: ./src/kernel/utils.c
+============================================================
+/* src/kernel/utils.c */
+#include <stdint.h>
+
+// FIX: Tell the compiler this function exists in another file (serial.c)
+extern void serial_log(char *str);
+
+// Helper: Convert integer to Hex String and send to Serial
+void serial_print_hex(uint32_t n) {
+    char hex_chars[] = "0123456789ABCDEF";
+    char buffer[11]; // "0x" + 8 chars + null
+    buffer[0] = '0';
+    buffer[1] = 'x';
+    buffer[10] = '\0';
+
+    for (int i = 0; i < 8; i++) {
+        buffer[9 - i] = hex_chars[n & 0xF];
+        n >>= 4;
+    }
+    
+    serial_log(buffer);
+}
+
+// Helper: Print a decimal number
+void serial_print_dec(uint32_t n) {
+    if (n == 0) {
+        serial_log("0");
+        return;
+    }
+
+    char buffer[12];
+    int i = 10;
+    buffer[11] = 0;
+
+    while (n > 0) {
+        buffer[i--] = (n % 10) + '0';
+        n /= 10;
+    }
+    
+    serial_log(&buffer[i + 1]);
+}
+int strlen(const char* str) {
+    int len = 0;
+    while (str[len])
+        len++;
+    return len;
+}
+
+int strcmp(const char* s1, const char* s2) {
+    while (*s1 && (*s1 == *s2)) {
+        s1++;
+        s2++;
+    }
+    return *(const unsigned char*)s1 - *(const unsigned char*)s2;
+}
+void strcpy_safe(char* dest, const char* src) {
+    if (!dest || !src) return;
+    int i = 0;
+    while (src[i]) {
+        dest[i] = src[i];
+        i++;
+    }
+    dest[i] = 0; // Null terminate
+}
+
+============================================================
+FILE PATH: ./src/kernel/multiboot.h
+============================================================
+#ifndef MULTIBOOT_H
+#define MULTIBOOT_H
+
+#include <stdint.h>
+
+typedef struct {
+    uint32_t mod_start;
+    uint32_t mod_end;
+    uint32_t string;
+    uint32_t reserved;
+} multiboot_module_t;
+
+typedef struct {
+    uint32_t flags;
+    uint32_t mem_lower;
+    uint32_t mem_upper;
+    uint32_t boot_device;
+    uint32_t cmdline;
+    uint32_t mods_count;
+    uint32_t mods_addr;
+    uint32_t syms[4];
+    uint32_t mmap_length;
+    uint32_t mmap_addr;
+    uint32_t drives_length;
+    uint32_t drives_addr;
+    uint32_t config_table;
+    uint32_t boot_loader_name;
+    uint32_t apm_table;
+    
+    // --- NEW: VBE / Framebuffer Info ---
+    uint32_t vbe_control_info;
+    uint32_t vbe_mode_info;
+    uint16_t vbe_mode;
+    uint16_t vbe_interface_seg;
+    uint16_t vbe_interface_off;
+    uint16_t vbe_interface_len;
+
+    uint64_t framebuffer_addr;
+    uint32_t framebuffer_pitch;
+    uint32_t framebuffer_width;
+    uint32_t framebuffer_height;
+    uint8_t  framebuffer_bpp;
+    uint8_t  framebuffer_type;
+} multiboot_info_t;
+
+typedef struct {
+    uint32_t size;
+    uint32_t addr_low;
+    uint32_t addr_high;
+    uint32_t len_low;
+    uint32_t len_high;
+    uint32_t type;
+} __attribute__((packed)) multiboot_memory_map_t;
+
+#endif
+
+============================================================
+FILE PATH: ./src/kernel/fs.c
+============================================================
+/* src/kernel/fs.c */
+#include "multiboot.h"
+#include <stdint.h>
+#include "../mm/heap.h"
+#include "../drivers/ata.h"
+#include "../kernel/process.h"
+
+// --- Externs ---
+extern void term_print(const char* str);
+extern int strcmp(const char* s1, const char* s2);
+extern int strlen(const char* str);
+extern void strcpy_safe(char* dest, const char* src);
+extern process_t* current_process; // Needed for CWD (Current Working Directory)
+extern void serial_log(char *str);
+
+// --- 1. File System Structures ---
+#define FS_FILE 0
+#define FS_DIRECTORY 1
+#define FS_MAGIC 0xDEADC0DE
+#define MAX_FILES 64          // Increased limit for tree
+#define DATA_START_SECTOR 10
+
+// The In-Memory Node (Tree)
+typedef struct file_node {
+    char name[32];
+    char* data;             // File content (NULL if directory)
+    uint32_t size;          // File size
+    uint8_t flags;          // FS_FILE or FS_DIRECTORY
+    
+    // Tree Pointers
+    struct file_node* parent;   // Parent directory ("..")
+    struct file_node* children; // First child (if this is a directory)
+    struct file_node* next;     // Next sibling in the same directory
+} file_t;
+
+// The On-Disk Entry (Flat Format)
+typedef struct {
+    char name[64];          // Long name to store full path (e.g. "usr/bin/hello")
+    uint32_t size;
+    uint32_t data_sector_offset;
+} disk_file_entry_t;
+
+file_t* fs_root = 0; 
+
+// --- 2. Tree Helper Functions ---
+
+// Create a new independent node
+file_t* fs_create_node(const char* name, int flags) {
+    file_t* new_node = (file_t*)kmalloc(sizeof(file_t));
+    
+    // Clear name
+    for(int i=0; i<32; i++) new_node->name[i] = 0;
+    
+    // Copy name
+    int i = 0;
+    while(name[i] && i < 31) { 
+        new_node->name[i] = name[i]; 
+        i++; 
+    }
+
+    new_node->flags = flags;
+    new_node->data = 0;
+    new_node->size = 0;
+    new_node->parent = 0;
+    new_node->children = 0;
+    new_node->next = 0;
+    return new_node;
+}
+
+// Add a child to a directory
+void fs_insert_child(file_t* parent, file_t* child) {
+    if (!parent || parent->flags != FS_DIRECTORY) return;
+    
+    child->parent = parent;
+    child->next = parent->children; // Insert at head
+    parent->children = child;
+}
+
+// Find a child by name in a directory
+file_t* fs_find_child(file_t* parent, const char* name) {
+    if (!parent || parent->flags != FS_DIRECTORY) return 0;
+    
+    file_t* curr = parent->children;
+    while (curr) {
+        if (strcmp(curr->name, name) == 0) return curr;
+        curr = curr->next;
+    }
+    return 0;
+}
+
+// --- 3. Path Resolution (The Logic Core) ---
+
+// Navigates paths like "usr/bin", "../test", "/", etc.
+file_t* fs_resolve_path(const char* path) {
+    if (!path || !path[0]) return current_process ? current_process->cwd : fs_root;
+    
+    file_t* current;
+    if (path[0] == '/') {
+        current = fs_root;
+    } else {
+        current = current_process ? current_process->cwd : fs_root;
+    }
+
+    char buffer[32];
+    int path_idx = (path[0] == '/') ? 1 : 0;
+    
+    while (path[path_idx]) {
+        int buf_idx = 0;
+        
+        // FIX: Copy until '/' or End, but Handle Overflow
+        while(path[path_idx] != '/' && path[path_idx] != 0) {
+            if (buf_idx < 31) {
+                buffer[buf_idx++] = path[path_idx];
+            }
+            // If >= 31, we just skip copying (truncate effective name) 
+            // but CONTINUE incrementing path_idx to consume the rest of the name!
+            path_idx++;
+        }
+        buffer[buf_idx] = 0;
+        
+        if (buf_idx > 0) {
+            if (strcmp(buffer, ".") == 0) {
+                // Stay
+            } else if (strcmp(buffer, "..") == 0) {
+                if (current->parent) current = current->parent;
+            } else {
+                file_t* next = fs_find_child(current, buffer);
+                if (!next) return 0; 
+                current = next;
+            }
+        }
+        
+        if (path[path_idx] == '/') path_idx++;
+    }
+    return current;
+}
+
+// --- 4. High-Level FS Operations ---
+
+void fs_mkdir(const char* name) {
+    // Basic mkdir only works in current directory for now
+    if (fs_find_child(current_process->cwd, name)) {
+        term_print("Error: Directory already exists.\n");
+        return;
+    }
+    file_t* dir = fs_create_node(name, FS_DIRECTORY);
+    fs_insert_child(current_process->cwd, dir);
+    term_print("Directory created.\n");
+}
+
+void fs_touch(const char* name) {
+    if (fs_find_child(current_process->cwd, name)) {
+        term_print("Error: File already exists.\n");
+        return;
+    }
+    file_t* f = fs_create_node(name, FS_FILE);
+    fs_insert_child(current_process->cwd, f);
+    term_print("File created.\n");
+}
+
+void fs_list(const char* path) {
+    file_t* dir;
+    if (path) dir = fs_resolve_path(path);
+    else dir = current_process->cwd;
+
+    if (!dir || dir->flags != FS_DIRECTORY) {
+        term_print("Invalid directory.\n");
+        return;
+    }
+
+    term_print("\n--- Listing ---\n");
+    file_t* curr = dir->children;
+    while(curr) {
+        term_print(curr->name);
+        if (curr->flags == FS_DIRECTORY) term_print("/");
+        term_print("\n");
+        curr = curr->next;
+    }
+    term_print("---------------\n");
+}
+
+void fs_cat(const char* path) {
+    file_t* f = fs_resolve_path(path);
+    if (!f || f->flags == FS_DIRECTORY) {
+        term_print("File not found or is a directory.\n");
+        return;
+    }
+    if (!f->data) {
+        term_print("(Empty)\n");
+        return;
+    }
+    term_print("\n");
+    for(uint32_t i=0; i<f->size; i++) {
+        char t[2] = {f->data[i], 0};
+        term_print(t);
+    }
+    term_print("\n");
+}
+
+void fs_write(const char* path, const char* content) {
+    file_t* f = fs_resolve_path(path);
+    if (!f) { term_print("File not found.\n"); return; }
+    
+    if (f->data) kfree(f->data);
+    
+    int len = strlen(content);
+    f->data = (char*)kmalloc(len + 1);
+    for(int i=0; i<len; i++) f->data[i] = content[i];
+    f->size = len;
+    
+    term_print("Written.\n");
+}
+
+void fs_delete(const char* name) {
+    // Only deletes from CWD for simplicity
+    file_t* parent = current_process->cwd;
+    file_t* curr = parent->children;
+    file_t* prev = 0;
+    
+    while(curr) {
+        if (strcmp(curr->name, name) == 0) {
+            if (curr->flags == FS_DIRECTORY && curr->children) {
+                term_print("Error: Directory not empty.\n");
+                return;
+            }
+            if (curr->data) kfree(curr->data);
+            
+            if (prev) prev->next = curr->next;
+            else parent->children = curr->next;
+            
+            kfree(curr);
+            term_print("Deleted.\n");
+            return;
+        }
+        prev = curr;
+        curr = curr->next;
+    }
+    term_print("Not found.\n");
+}
+
+// --- 5. Syscall Implementations ---
+
+// Helper: Find free file descriptor slot
+int get_free_fd() {
+    for(int i=0; i<MAX_OPEN_FILES; i++) {
+        if (current_process->fd_table[i].file_node == 0) return i;
+    }
+    return -1;
+}
+
+int sys_open(const char* path) {
+    file_t* f = fs_resolve_path(path);
+    if (!f) return -1;
+    
+    int fd = get_free_fd();
+    if (fd == -1) return -1;
+    
+    current_process->fd_table[fd].file_node = f;
+    current_process->fd_table[fd].offset = 0;
+    // Flags could be added here
+    return fd;
+}
+
+void sys_close(int fd) {
+    if (fd >= 0 && fd < MAX_OPEN_FILES) {
+        current_process->fd_table[fd].file_node = 0;
+    }
+}
+
+int sys_read_file(int fd, char* buffer, int size) {
+    if (fd < 0 || fd >= MAX_OPEN_FILES) return -1;
+    file_descriptor_t* desc = &current_process->fd_table[fd];
+    file_t* file = (file_t*)desc->file_node;
+    if (!file) return -1;
+
+    int left = file->size - desc->offset;
+    if (left <= 0) return 0;
+    
+    int to_read = (size < left) ? size : left;
+    for(int i=0; i<to_read; i++) {
+        buffer[i] = file->data[desc->offset + i];
+    }
+    desc->offset += to_read;
+    return to_read;
+}
+
+int sys_write_file(int fd, char* buffer, int size) {
+    if (fd < 0 || fd >= MAX_OPEN_FILES) return -1;
+    file_descriptor_t* desc = &current_process->fd_table[fd];
+    file_t* file = (file_t*)desc->file_node;
+    if (!file) return -1;
+
+    // Expand file if writing past end
+    int end_pos = desc->offset + size;
+    if (end_pos > (int)file->size) {
+        char* new_data = (char*)kmalloc(end_pos);
+        // Copy old data
+        for(uint32_t i=0; i<file->size; i++) new_data[i] = file->data[i];
+        if (file->data) kfree(file->data);
+        file->data = new_data;
+        file->size = end_pos;
+    }
+
+    // Write new data
+    for(int i=0; i<size; i++) {
+        file->data[desc->offset + i] = buffer[i];
+    }
+    desc->offset += size;
+    return size;
+}
+
+int sys_seek(int fd, int offset, int whence) {
+    if (fd < 0 || fd >= MAX_OPEN_FILES) return -1;
+    file_descriptor_t* desc = &current_process->fd_table[fd];
+    file_t* file = (file_t*)desc->file_node;
+    if (!file) return -1;
+
+    int new_pos = desc->offset;
+    if (whence == 0) new_pos = offset;      // SET
+    if (whence == 1) new_pos += offset;     // CUR
+    if (whence == 2) new_pos = file->size + offset; // END
+    
+    if (new_pos < 0) new_pos = 0;
+    if (new_pos > (int)file->size) new_pos = file->size;
+    
+    desc->offset = new_pos;
+    return new_pos;
+}
+
+int sys_chdir(const char* path) {
+    file_t* dir = fs_resolve_path(path);
+    if (!dir || dir->flags != FS_DIRECTORY) return -1;
+    current_process->cwd = dir;
+    return 0;
+}
+
+void sys_getcwd(char* buf, int size) {
+    (void)size;
+    // Simple version: return just the name of the current folder
+    if (current_process->cwd == fs_root) {
+        strcpy_safe(buf, "/");
+    } else {
+        buf[0] = '/';
+        strcpy_safe(buf + 1, current_process->cwd->name);
+    }
+}
+
+int sys_readdir(int index, char* buf) {
+    // List files in CWD
+    file_t* curr = current_process->cwd->children;
+    int i = 0;
+    while (curr) {
+        if (i == index) {
+            strcpy_safe(buf, curr->name);
+            return 1;
+        }
+        curr = curr->next;
+        i++;
+    }
+    return 0;
+}
+
+// --- 6. Persistence (Save/Load) ---
+
+void path_join(char* dest, const char* parent, const char* child) {
+    int i = 0;
+    while(parent[i]) { dest[i] = parent[i]; i++; }
+    // Add slash if not at start
+    if (i > 0 && parent[i-1] != '/') dest[i++] = '/';
+    int j = 0;
+    while(child[j]) { dest[i++] = child[j++]; }
+    dest[i] = 0;
+}
+
+// Recursive function to flatten tree into disk table
+void fs_flatten_tree(file_t* node, char* current_path, disk_file_entry_t* table, int* idx, int* sector_offset) {
+    if (!node || *idx >= MAX_FILES) return;
+
+    char full_path[64];
+    path_join(full_path, current_path, node->name);
+
+    if (node->flags == FS_FILE) {
+        // Save File Entry
+        strcpy_safe(table[*idx].name, full_path);
+        table[*idx].size = node->size;
+        table[*idx].data_sector_offset = *sector_offset;
+        
+        // Write Data
+        int sectors = (node->size + 511) / 512;
+        if (node->data) {
+            uint32_t* buf = (uint32_t*)kmalloc(sectors * 512);
+            // Zero out buffer
+            for(int k=0; k<sectors*512; k++) ((char*)buf)[k] = 0;
+            // Copy data
+            for(uint32_t k=0; k<node->size; k++) ((char*)buf)[k] = node->data[k];
+            
+            ata_write_sectors(DATA_START_SECTOR + *sector_offset, sectors, buf);
+            kfree(buf);
+        }
+        *sector_offset += sectors;
+        (*idx)++;
+    }
+
+    if (node->flags == FS_DIRECTORY) {
+        fs_flatten_tree(node->children, full_path, table, idx, sector_offset);
+    }
+
+    fs_flatten_tree(node->next, current_path, table, idx, sector_offset);
+}
+
+void fs_save_to_disk() {
+    term_print(" [FS] Saving...\n");
+    
+    // 1. Header
+    uint32_t* header = (uint32_t*)kmalloc(512);
+    header[0] = FS_MAGIC;
+    
+    // 2. Table
+    disk_file_entry_t* table = (disk_file_entry_t*)kmalloc(MAX_FILES * sizeof(disk_file_entry_t));
+    for(uint32_t i=0; i < MAX_FILES * sizeof(disk_file_entry_t); i++) ((char*)table)[i] = 0;    
+    int count = 0;
+    int offset = 0;
+    
+    // Start recursion from root's children
+    if (fs_root->children) {
+        fs_flatten_tree(fs_root->children, "", table, &count, &offset);
+    }
+    
+    header[1] = count;
+    
+    ata_write_sectors(0, 1, header);
+    // Assuming table fits in 4 sectors (64 files * ~72 bytes = 4600 bytes) -> 9 sectors.
+    // Let's write 8 sectors for the table to be safe.
+    ata_write_sectors(1, 8, (uint32_t*)table);
+    
+    kfree(header);
+    kfree(table);
+    term_print(" [FS] Saved.\n");
+}
+
+void fs_load_from_disk() {
+    uint32_t* header = (uint32_t*)kmalloc(512);
+    ata_read_sectors(0, 1, header);
+    
+    if (header[0] != FS_MAGIC) {
+        kfree(header);
+        serial_log(" [FS] No filesystem found.\n");
+        return;
+    }
+    
+    int count = header[1];
+    kfree(header);
+    term_print(" [FS] Loading disk data...\n");
+    
+    disk_file_entry_t* table = (disk_file_entry_t*)kmalloc(MAX_FILES * sizeof(disk_file_entry_t));
+    ata_read_sectors(1, 8, (uint32_t*)table);
+    
+    for(int i=0; i<count; i++) {
+        if (table[i].name[0] == 0) continue;
+        
+        // Simplified Loader: Create file in root
+        // (Recursive path creation would go here for full support)
+        file_t* f = fs_create_node(table[i].name, FS_FILE);
+        f->size = table[i].size;
+        f->data = (char*)kmalloc(f->size + 1);
+        
+        int sectors = (f->size + 511) / 512;
+        uint32_t* buf = (uint32_t*)kmalloc(sectors * 512);
+        
+        ata_read_sectors(DATA_START_SECTOR + table[i].data_sector_offset, sectors, buf);
+        
+        for(uint32_t k=0; k<f->size; k++) f->data[k] = ((char*)buf)[k];
+        f->data[f->size] = 0;
+        kfree(buf);
+        
+        fs_insert_child(fs_root, f);
+    }
+    
+    kfree(table);
+}
+
+// --- 7. Initialization ---
+
+void init_fs(multiboot_info_t* mboot_ptr) {
+    fs_root = fs_create_node("/", FS_DIRECTORY);
+    
+    // Load Modules (RamFS)
+    if (mboot_ptr->flags & (1 << 3)) {
+        multiboot_module_t* mod = (multiboot_module_t*)mboot_ptr->mods_addr;
+        for(uint32_t i=0; i < mboot_ptr->mods_count; i++) {
+            char* name = (char*)mod[i].string;
+            file_t* f = fs_create_node(name, FS_FILE);
+            
+            uint32_t len = mod[i].mod_end - mod[i].mod_start;
+            f->data = (char*)kmalloc(len + 1);
+            char* src = (char*)mod[i].mod_start;
+            for(uint32_t k=0; k<len; k++) f->data[k] = src[k];
+            f->data[len] = 0;
+            f->size = len;
+            
+            fs_insert_child(fs_root, f);
+            term_print(" [FS] Loaded module: "); term_print(name); term_print("\n");
+        }
+    }
+    
+    // Load Disk
+    fs_load_from_disk();
+}
+
+============================================================
+FILE PATH: ./src/kernel/syscall.h
+============================================================
+/* src/kernel/syscall.h */
+#ifndef SYSCALL_H
+#define SYSCALL_H
+
+#include <stdint.h>
+#include "../cpu/idt.h" // For registers_t
+
+// Syscall ID numbers
+
+#define SYS_PRINT 0
+#define SYS_YIELD 1
+#define SYS_READ  2
+#define SYS_EXIT  3
+#define SYS_WAIT  4
+#define SYS_SBRK  9
+#define SYS_OPEN    5
+#define SYS_CLOSE   6
+#define SYS_FREAD   7  // "FREAD" to avoid conflict with keyboard READ
+#define SYS_READDIR 8
+#define SYS_WRITE 11
+#define SYS_SEEK 12
+#define SYS_IOCTL 13
+
+// The dispatcher function called by the Interrupt Handler
+void syscall_handler(registers_t* regs);
+
+// Initialization
+void init_syscalls();
+
+#endif
+
+============================================================
+FILE PATH: ./src/kernel/main.c
+============================================================
+/* src/kernel/main.c */
+#include <stdint.h>
+#include "multiboot.h"
+#include "process.h"
+#include "../cpu/gdt.h"
+#include "../cpu/idt.h"
+#include "../mm/heap.h"
+#include "syscall.h"
+#include "../gui/window.h"
+
+// --- Externs ---
+extern void init_serial();
+extern void serial_log(char *str);
+extern void serial_write_char(char c);
+
+extern void init_pmm(uint32_t mem_size);
+extern void init_vmm();
+extern void init_heap();
+
+extern void init_fs(multiboot_info_t* mboot_ptr);
+extern void execute_command(char* input); 
+
+// Graphics & Inputs
+extern void init_graphics(multiboot_info_t* mboot);
+extern void init_ata();
+extern void init_mouse();
+extern int mouse_x;
+extern int mouse_y;
+extern int mouse_left_button;
+
+extern void wm_putc(window_t* win, char c);
+extern void wm_print(window_t* win, const char* str);
+extern int strlen(const char* str);
+extern void strcpy_safe(char* dest, const char* src);
+
+window_t* console_win = 0;
+
+// --- Syscall Wrappers ---
+void sys_print(const char* msg) {
+    __asm__ volatile ("int $0x80" : : "a" (SYS_PRINT), "b" (msg));
+}
+void sys_yield() {
+    __asm__ volatile ("int $0x80" : : "a" (SYS_YIELD));
+}
+char sys_read() {
+    char c;
+    __asm__ volatile ("int $0x80" : "=a" (c) : "a" (SYS_READ));
+    return c;
+}
+
+// --- Terminal Abstraction ---
+
+void term_putc(char c) {
+    if (console_win) {
+        wm_putc(console_win, c);
+    } else {
+        serial_write_char(c);
+    }
+}
+
+void term_print(const char* str) {
+    if (console_win) {
+        wm_print(console_win, str);
+    } else {
+        serial_log((char*)str);
+    }
+}
+
+void term_clear() {
+    if (console_win) {
+        // Clear window buffer to bg_color
+        int total = console_win->width * console_win->height;
+        for(int i = 0; i < total; i++) {
+            console_win->buffer[i] = console_win->bg_color;
+        }
+        console_win->cursor_x = 0;
+        console_win->cursor_y = 0;
+    }
+}
+
+// --- Shell & Tasks ---
+
+#define HISTORY_MAX 10
+#define CMD_LEN 256
+char history[HISTORY_MAX][CMD_LEN];
+int history_count = 0;
+
+void shell_task() {
+    char cmd_buffer[CMD_LEN];
+    int idx = 0;
+    int history_view_idx = 0; 
+
+    // MODIFIED: Message indicates Kernel Mode
+    sys_print("\n[SHELL] Process Started (Kernel Mode).\n");
+    sys_print("MyOS Shell > ");
+
+    while(1) {
+        char c = sys_read();
+        
+        if (c == 0) {
+            sys_yield();
+            continue;
+        }
+
+        // UP ARROW (0x11)
+        if (c == 0x11) {
+            if (history_count > 0 && history_view_idx > 0) {
+                while(idx > 0) { sys_print("\b \b"); idx--; }
+                history_view_idx--;
+                strcpy_safe(cmd_buffer, history[history_view_idx]);
+                idx = strlen(cmd_buffer);
+                sys_print(cmd_buffer);
+            }
+        }
+        // DOWN ARROW (0x12)
+        else if (c == 0x12) {
+            if (history_count > 0 && history_view_idx < history_count) {
+                while(idx > 0) { sys_print("\b \b"); idx--; }
+                history_view_idx++;
+                if (history_view_idx == history_count) {
+                    cmd_buffer[0] = 0; idx = 0;
+                } else {
+                    strcpy_safe(cmd_buffer, history[history_view_idx]);
+                    idx = strlen(cmd_buffer);
+                    sys_print(cmd_buffer);
+                }
+            }
+        }
+        // ENTER
+        else if (c == '\n') {
+            sys_print("\n");
+            cmd_buffer[idx] = '\0';
+            
+            if (idx > 0) {
+                if (history_count < HISTORY_MAX) {
+                    strcpy_safe(history[history_count], cmd_buffer);
+                    history_count++;
+                } else {
+                    for(int i=0; i<HISTORY_MAX-1; i++) strcpy_safe(history[i], history[i+1]);
+                    strcpy_safe(history[HISTORY_MAX-1], cmd_buffer);
+                }
+                history_view_idx = history_count; 
+                execute_command(cmd_buffer);
+            } else {
+                execute_command(""); 
+            }
+            idx = 0;
+        }
+        // BACKSPACE
+        else if (c == '\b') {
+            if (idx > 0) { idx--; sys_print("\b \b"); }
+        }
+        // NORMAL CHAR
+        else if (c >= ' ' && c <= '~') {
+            if (idx < CMD_LEN - 1) {
+                cmd_buffer[idx++] = c;
+                char temp[2] = {c, '\0'};
+                sys_print(temp);
+            }
+        }
+    }
+}
+
+void system_monitor_task() {
+    int counter = 0;
+    while(1) {
+        counter++;
+        if (counter % 100000000 == 0) {
+            serial_log(" [BG-TASK] System Alive. Tick...\n");
+            counter = 0;
+        }
+    }
+}
+
+void kmain(multiboot_info_t* mboot_ptr) {
+    init_serial();
+    
+    // 1. Initialize Core
+    init_gdt();
+    init_idt();
+    init_pmm(mboot_ptr->mem_upper); 
+    init_vmm();
+    init_heap();
+    init_ata();
+    init_fs(mboot_ptr);
+
+    // 2. Start GUI
+    init_graphics(mboot_ptr);
+    init_mouse();
+    init_wm();
+    
+    // Create the Terminal Window
+    console_win = create_window("Terminal", 50, 50, 600, 400);
+    console_win->text_color = 0xFFFFFFFF;
+    console_win->bg_color   = 0xFF000000;
+    // Clear buffer to black
+    for(int i=0; i < 600*400; i++) console_win->buffer[i] = 0xFF000000;
+
+    term_print(" [SYSTEM] Graphics Terminal Initialized.\n");
+
+    // 3. Start Multitasking
+    init_multitasking();
+    
+    // FIX: Pass '1' as the last argument to create Kernel Threads (Ring 0).
+    // This allows them to access the kernel heap (console_win) and I/O ports without crashing.
+    create_process(system_monitor_task, 0, 0, 1);
+    create_process(shell_task, 0, 0, 1);
+
+    // 4. Main Loop (The Compositor)
+    while(1) {
+        // We handle mouse state updates here before refreshing
+        wm_mouse_event(mouse_x, mouse_y, mouse_left_button);
+        
+        // Draw the desktop
+        wm_refresh();
+    }
+}
+
+============================================================
+FILE PATH: ./src/kernel/syscall.c
+============================================================
+/* src/kernel/syscall.c */
+#include "syscall.h"
+#include "process.h"
+#include "fs.h" 
+
+extern void term_print(const char* str); 
+extern void process_exit(int code);
+extern char kbd_buffer_read();
+extern void term_clear();
+extern int sys_open(const char* name);
+extern void sys_close(int fd);
+extern int sys_read_file(int fd, char* buf, int size);
+extern int sys_readdir(int index, char* buf);
+extern void vmm_map_page(void* phys, void* virt, int flags);
+extern void* pmm_alloc_block();
+extern void fs_delete(const char* name);
+extern int sys_chdir(const char* path);
+extern void sys_getcwd(char* buf, int size);
+extern int sys_write_file(int fd, char* buffer, int size);
+extern process_t* current_process;
+
+// FIX: Security Check
+// Ensure the pointer + size is NOT within Kernel Space.
+// In our setup, User space is generally high (above 128MB) or specifically mapped.
+// But critically, it must NOT be < 128MB (Kernel Identity) or > 0xC0000000 (if we used high kernel).
+// Since we identity map 0-128MB as Supervisor, we just need to check:
+// Is ptr >= 128MB? (0x08000000)
+// This is a simple check for this specific OS layout.
+int is_valid_user_ptr(void* ptr, int size) {
+    uint32_t addr = (uint32_t)ptr;
+    // Check for overflow
+    if (addr + size < addr) return 0; 
+    
+    // Protect Kernel Low Mem (0 - 128MB)
+    if (addr < 0x08000000) return 0;
+    if (addr + size < 0x08000000) return 0;
+
+    return 1;
+}
+
+void* sys_sbrk(int increment) {
+    if (!current_process) return (void*)-1;
+    process_t* proc = current_process;
+    uint32_t old_break = proc->program_break;
+    uint32_t new_break = old_break + increment;
+    
+    // Page align (4KB)
+    uint32_t old_page_top = (old_break + 4095) & 0xFFFFF000;
+    uint32_t new_page_top = (new_break + 4095) & 0xFFFFF000;
+
+    if (new_page_top > old_page_top) {
+        uint32_t pages_needed = (new_page_top - old_page_top) / 4096;
+        for (uint32_t i = 0; i < pages_needed; i++) {
+            void* phys = pmm_alloc_block();
+            if (!phys) return (void*)-1;
+            vmm_map_page(phys, (void*)(old_page_top + (i * 4096)), 0x7);
+            process_track_page(proc, phys, (void*)(old_page_top + (i * 4096)));
+        }
+    }
+    proc->program_break = new_break;
+    return (void*)old_break;
+}
+
+void syscall_handler(registers_t* regs) {
+    // FIX: Validate pointers for specific syscalls
+    // (Partial implementation - applying to dangerous string/buffer calls)
+    
+    switch (regs->eax) {
+        case SYS_PRINT: 
+            if (is_valid_user_ptr((void*)regs->ebx, 1)) 
+                term_print((const char*)regs->ebx);
+            break;
+            
+        case SYS_YIELD: schedule(); break;
+        
+        case SYS_READ: {
+            __asm__ volatile("cli");
+            char c = kbd_buffer_read();
+            if (c != 0) {
+                __asm__ volatile("sti");
+                regs->eax = (uint32_t)c;
+            } else {
+                process_block(1);
+                // process_block yields, so when we return here, we are awake
+                regs->eax = 0; 
+                // Interrupts are re-enabled by schedule() logic usually, but safe to STI here
+                __asm__ volatile("sti"); 
+            }
+            break;
+        }
+        
+        case SYS_EXIT: process_exit((int)regs->ebx); break;
+        case SYS_WAIT: regs->eax = process_wait((int)regs->ebx, (int*)regs->ecx); break;
+        
+        case SYS_OPEN: 
+            if (is_valid_user_ptr((void*)regs->ebx, 1))
+                regs->eax = sys_open((const char*)regs->ebx); 
+            break;
+            
+        case SYS_CLOSE: sys_close((int)regs->ebx); break;
+        
+        case SYS_FREAD: 
+            // Validate buffer
+            if (is_valid_user_ptr((void*)regs->ecx, (int)regs->edx))
+                regs->eax = sys_read_file((int)regs->ebx, (char*)regs->ecx, (int)regs->edx); 
+            break;
+            
+        case SYS_READDIR: 
+             if (is_valid_user_ptr((void*)regs->ecx, 32))
+                regs->eax = sys_readdir((int)regs->ebx, (char*)regs->ecx); 
+             break;
+             
+        case SYS_SBRK: regs->eax = (uint32_t)sys_sbrk((int)regs->ebx); break;
+        
+        case SYS_WRITE: 
+            if (is_valid_user_ptr((void*)regs->ecx, (int)regs->edx))
+                regs->eax = sys_write_file((int)regs->ebx, (char*)regs->ecx, (int)regs->edx); 
+            break;
+        
+        case 13: term_clear(); regs->eax = 0; break;
+        case 14: 
+            if (is_valid_user_ptr((void*)regs->ebx, 1))
+                fs_delete((const char*)regs->ebx); 
+            regs->eax = 0; 
+            break;
+            
+        case 15: 
+            if (is_valid_user_ptr((void*)regs->ebx, 1))
+                regs->eax = sys_chdir((const char*)regs->ebx); 
+            break;
+        case 16: 
+            if (is_valid_user_ptr((void*)regs->ebx, (int)regs->ecx))
+                sys_getcwd((char*)regs->ebx, (int)regs->ecx); 
+            break;
+    }
+}
+
+============================================================
+FILE PATH: ./src/kernel/process.h
+============================================================
+/* src/kernel/process.h */
+#ifndef PROCESS_H
+#define PROCESS_H
+
+#include <stdint.h>
+#include "../mm/vmm.h" 
+
+#define MAX_OPEN_FILES 16
+
+// Process States
+#define PROCESS_READY   0
+#define PROCESS_BLOCKED 1
+#define PROCESS_ZOMBIE  2 
+
+// Constants
+#define USER_STACK_TOP  0xBFFFF000 
+#define USER_STACK_SIZE 0x4000     
+
+struct file_node;
+
+typedef struct {
+    struct file_node* file_node; 
+    int offset;
+    int flags;       
+} file_descriptor_t;
+
+typedef struct process {
+    int pid;
+    int parent_pid;
+    int state;
+    int wait_reason;
+    int exit_code;
+    
+    uint32_t esp;             
+    uint32_t cr3;             
+    void* kernel_stack_ptr;   
+    
+    uint32_t program_break;   
+    struct page_node* allocated_pages; 
+    
+    struct file_node* cwd;
+    file_descriptor_t fd_table[MAX_OPEN_FILES];
+
+    struct process *next;
+} process_t;
+
+// API
+void init_multitasking();
+
+// NEW: Added 'is_kernel' parameter
+int create_process(void (*entry_point)(), char* args, uint32_t initial_break, int is_kernel);
+
+void process_exit(int code);
+void schedule();
+void process_block(int reason);
+void process_unblock(int reason);
+int process_wait(int pid, int* status);
+void process_track_page(process_t* proc, void* phys, void* virt);
+
+#endif
+
+============================================================
+FILE PATH: ./src/kernel/shell.c
+============================================================
+/* src/kernel/shell.c */
+#include "../mm/heap.h"
+
+// --- Externs ---
+extern void term_print(const char* str);
+extern void term_clear();
+extern int strcmp(const char* s1, const char* s2);
+extern int strlen(const char* str);
+extern void strcpy_safe(char* dest, const char* src);
+extern int elf_load_file(const char* name, char* args); 
+
+// --- FS Externs ---
+extern void fs_list(const char* path);
+extern void fs_cat(const char* path);
+extern void fs_touch(const char* path);
+extern void fs_mkdir(const char* path);
+extern void fs_delete(const char* path);
+extern int sys_chdir(const char* path);
+extern void sys_getcwd(char* buf, int size);
+
+// --- Helpers ---
+int str_starts_with(const char* str, const char* prefix) {
+    while (*prefix) {
+        if (*prefix++ != *str++) return 0;
+    }
+    return 1;
+}
+
+// --- Command Execution ---
+void execute_command(char* input) {
+    if (input[0] == 0) return;
+
+    if (strcmp(input, "ls") == 0 || str_starts_with(input, "ls ")) {
+        char* path = 0;
+        if (input[2] == ' ') path = input + 3;
+        fs_list(path); 
+    }
+    else if (strcmp(input, "pwd") == 0) {
+        char buf[64];
+        sys_getcwd(buf, 64);
+        term_print(buf);
+        term_print("\n");
+    }
+    else if (str_starts_with(input, "mkdir ")) {
+        fs_mkdir(input + 6);
+    }
+    else if (str_starts_with(input, "cat ")) {
+        fs_cat(input + 4);
+    }
+    else if (str_starts_with(input, "touch ")) {
+        fs_touch(input + 6);
+    }
+    else if (str_starts_with(input, "rm ")) {
+        fs_delete(input + 3);
+    }
+    else if (strcmp(input, "clear") == 0) {
+        term_clear();
+    }
+    else if (strcmp(input, "help") == 0) {
+        term_print("\n--- MyOS Commands ---\n");
+        term_print("  ls [path]       - List directory\n");
+        term_print("  cd <path>       - Change directory\n");
+        term_print("  pwd             - Print working directory\n");
+        term_print("  cat <file>      - Print file content\n");
+        term_print("  touch <file>    - Create file\n");
+        term_print("  mkdir <name>    - Create directory\n");
+        term_print("  rm <file>       - Delete file\n");
+        term_print("  clear           - Clear screen\n");
+        term_print("  <program>       - Run program (e.g. hello.elf)\n");
+    }
+    else if (str_starts_with(input, "cd ")) {
+        if (sys_chdir(input + 3) != 0) {
+            term_print("Directory not found.\n");
+        }
+    }
+    else {
+        // Try to execute as program
+        char filename[32];
+        char args[64];
+        int i = 0;
+        
+        // Split filename and args
+        while(input[i] && input[i] != ' ' && i < 31) {
+            filename[i] = input[i];
+            i++;
+        }
+        filename[i] = 0;
+        
+        if (input[i] == ' ') strcpy_safe(args, input + i + 1);
+        else args[0] = 0;
+
+        if (elf_load_file(filename, args) == -1) {
+            term_print("Unknown command or file not found.\n");
+        }
+    }
+    term_print("MyOS Shell > ");
+}
+
+============================================================
+FILE PATH: ./src/mm/heap.h
+============================================================
+#ifndef HEAP_H
+#define HEAP_H
+
+#include <stdint.h>
+#include <stddef.h>
+
+void init_heap();
+void* kmalloc(size_t size);
+void kfree(void* ptr);
+
+#endif
+
+============================================================
+FILE PATH: ./src/mm/pmm.c
+============================================================
+/* src/mm/pmm.c */
+#include <stdint.h>
+#include <stddef.h>
+
+#define BLOCK_SIZE 4096
+
+// Bitmap to track memory usage (1 = Used, 0 = Free)
+// 32768 bytes * 8 bits * 4096 bytes = 1GB addressable
+uint8_t memory_bitmap[32768]; 
+uint32_t used_blocks = 0;
+uint32_t max_blocks = 0;
+
+void pmm_set(uint32_t bit) {
+    memory_bitmap[bit / 8] |= (1 << (bit % 8));
+}
+
+void pmm_unset(uint32_t bit) {
+    memory_bitmap[bit / 8] &= ~(1 << (bit % 8));
+}
+
+int pmm_test(uint32_t bit) {
+    return memory_bitmap[bit / 8] & (1 << (bit % 8));
+}
+
+int pmm_find_first_free() {
+    for (uint32_t i = 0; i < max_blocks / 8; i++) {
+        if (memory_bitmap[i] != 0xFF) { 
+            for (int j = 0; j < 8; j++) {
+                int bit = 1 << j;
+                if (!(memory_bitmap[i] & bit)) return i * 8 + j;
+            }
+        }
+    }
+    return -1;
+}
+
+void init_pmm(uint32_t mem_size_kb) {
+    max_blocks = (mem_size_kb * 1024) / BLOCK_SIZE;
+    used_blocks = max_blocks;
+
+    // 1. Mark ALL memory as used initially (Safety First)
+    for(uint32_t i=0; i < max_blocks / 8; i++) memory_bitmap[i] = 0xFF;
+
+    // 2. Free the usable RAM (Start at 4MB to protect Kernel/Modules)
+    // We assume contiguous RAM for QEMU.
+    uint32_t mem_start_block = (4 * 1024 * 1024) / BLOCK_SIZE;
+    
+    for (uint32_t i = mem_start_block; i < max_blocks; i++) {
+        pmm_unset(i);
+        used_blocks--;
+    }
+}
+
+void* pmm_alloc_block() {
+    if (max_blocks - used_blocks <= 0) return 0;
+    
+    int frame = pmm_find_first_free();
+    if (frame == -1) return 0;
+
+    pmm_set(frame);
+    used_blocks++;
+    
+    return (void*)(frame * BLOCK_SIZE);
+}
+
+void pmm_free_block(void* p) {
+    uint32_t addr = (uint32_t)p;
+    uint32_t frame = addr / BLOCK_SIZE;
+    
+    if (frame >= max_blocks) return;
+    
+    pmm_unset(frame);
+    used_blocks--;
+}
+
+============================================================
+FILE PATH: ./src/mm/heap.c
+============================================================
+/* src/mm/heap.c */
+#include "heap.h"
+
+extern void* pmm_alloc_block();
+extern void vmm_map_page(void* phys, void* virt, int flags); 
+extern void term_print(const char* str);
+
+#define HEAP_START 0xD0000000
+#define HEAP_SIZE  (16 * 1024 * 1024)
+#define BLOCK_SIZE 4096
+
+typedef struct alloc_header {
+    struct alloc_header* next;
+    uint32_t size;  
+    uint8_t is_free;
+} alloc_header_t;
+
+alloc_header_t* free_list_head = 0;
+
+void init_heap() {
+    void* heap_start = (void*)HEAP_START;
+    for (uint32_t i = 0; i < HEAP_SIZE; i += BLOCK_SIZE) {
+        void* phys = pmm_alloc_block();
+        if (!phys) {
+            term_print(" [HEAP] OOM during init!\n");
+            return;
+        }
+        vmm_map_page(phys, (void*)((uint32_t)heap_start + i), 0x3);
+    }
+
+    free_list_head = (alloc_header_t*)heap_start;
+    free_list_head->size = HEAP_SIZE - sizeof(alloc_header_t);
+    free_list_head->is_free = 1;
+    free_list_head->next = 0;
+}
+
+void* kmalloc(size_t size) {
+    // FIX: Critical Section Start
+    __asm__ volatile("cli");
+
+    if (size % 4 != 0) size += (4 - (size % 4));
+    alloc_header_t* current = free_list_head;
+
+    while (current) {
+        if (current->is_free && current->size >= size) {
+            if (current->size > size + sizeof(alloc_header_t) + 4) {
+                alloc_header_t* new_block = (alloc_header_t*)((uint32_t)current + sizeof(alloc_header_t) + size);
+                new_block->is_free = 1;
+                new_block->size = current->size - size - sizeof(alloc_header_t);
+                new_block->next = current->next;
+                current->size = size;
+                current->next = new_block;
+            }
+            current->is_free = 0;
+            
+            // FIX: Critical Section End
+            __asm__ volatile("sti");
+            return (void*)((uint32_t)current + sizeof(alloc_header_t));
+        }
+        current = current->next;
+    }
+    
+    // FIX: Critical Section End
+    __asm__ volatile("sti");
+    return 0;
+}
+
+void heap_coalesce() {
+    alloc_header_t* curr = free_list_head;
+    while (curr && curr->next) {
+        if (curr->is_free && curr->next->is_free) {
+            curr->size += curr->next->size + sizeof(alloc_header_t);
+            curr->next = curr->next->next;
+        } else {
+            curr = curr->next;
+        }
+    }
+}
+
+void kfree(void* ptr) {
+    if (!ptr) return;
+    
+    // FIX: Critical Section Start
+    __asm__ volatile("cli");
+    
+    alloc_header_t* header = (alloc_header_t*)((uint32_t)ptr - sizeof(alloc_header_t));
+    header->is_free = 1;
+    heap_coalesce();
+
+    // FIX: Critical Section End
+    __asm__ volatile("sti");
+}
+
+============================================================
+FILE PATH: ./src/mm/vmm.c
+============================================================
+/* src/mm/vmm.c */
+#include "vmm.h"
+
+extern void* pmm_alloc_block();
+extern void pmm_free_block(void* p);
+extern void serial_log(char *str);
+extern void* memset(void* ptr, int value, uint32_t num); 
+
+page_directory_t* current_directory = 0;
+page_directory_t* kernel_directory = 0;
+
+void vmm_flush_tlb_entry(void* addr) {
+   __asm__ volatile("invlpg (%0)" ::"r" (addr) : "memory");
+}
+
+void vmm_load_pd(uint32_t* addr) {
+    __asm__ volatile("mov %0, %%cr3" :: "r"(addr));
+    uint32_t cr0;
+    __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
+    cr0 |= 0x80000000; // Enable Paging
+    __asm__ volatile("mov %0, %%cr0" :: "r"(cr0));
+}
+
+uint32_t get_cr3() {
+    uint32_t cr3;
+    __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
+    return cr3;
+}
+
+void set_cr3(uint32_t pd) {
+    __asm__ volatile("mov %0, %%cr3" :: "r"(pd));
+}
+
+void vmm_map_page_in_dir(page_directory_t* dir, void* phys, void* virt, int flags) {
+    uint32_t pdindex = (uint32_t)virt >> 22;
+    uint32_t ptindex = ((uint32_t)virt >> 12) & 0x03FF;
+
+    if (!(dir->tablesPhysical[pdindex] & I86_PTE_PRESENT)) {
+        uint32_t* new_pt_phys = (uint32_t*)pmm_alloc_block();
+        memset(new_pt_phys, 0, 4096); 
+        dir->tablesPhysical[pdindex] = (uint32_t)new_pt_phys | I86_PTE_PRESENT | I86_PTE_WRITABLE | I86_PTE_USER;
+    }
+
+    uint32_t pt_phys = dir->tablesPhysical[pdindex] & 0xFFFFF000;
+    uint32_t* pt_virt = (uint32_t*)pt_phys; // NOTE: In a real higher-half kernel, we would need to map this temporarily.
+                                            // Since we identity map low memory, this works for now.
+
+    pt_virt[ptindex] = ((uint32_t)phys) | I86_PTE_PRESENT | I86_PTE_WRITABLE | flags;
+    
+    if (dir == current_directory) {
+        vmm_flush_tlb_entry(virt);
+    }
+}
+
+void vmm_map_page(void* phys, void* virt, int flags) {
+    vmm_map_page_in_dir(current_directory, phys, virt, flags);
+}
+
+page_directory_t* vmm_create_address_space() {
+    page_directory_t* new_pd = (page_directory_t*)pmm_alloc_block();
+    memset(new_pd, 0, sizeof(page_directory_t));
+    new_pd->physicalAddr = (uint32_t)new_pd;
+    
+    // Copy Kernel Identity Mappings (0-128MB)
+    // Critical: We share kernel tables, we do NOT copy the pages themselves, just the pointers to tables.
+    for (int i = 0; i < 32; i++) { 
+         new_pd->tablesPhysical[i] = kernel_directory->tablesPhysical[i];
+    }
+    return new_pd;
+}
+
+// --- FIX: Added Cleanup Function ---
+void vmm_free_address_space(page_directory_t* pd) {
+    // 1. Loop through all Page Directory Entries
+    // Start at 32 to skip Kernel Identity map (0-128MB)
+    for (int i = 32; i < 1024; i++) {
+        uint32_t entry = pd->tablesPhysical[i];
+        
+        if (entry & I86_PTE_PRESENT) {
+            uint32_t* pt_phys = (uint32_t*)(entry & 0xFFFFF000);
+            
+            // 2. Loop through Page Table Entries
+            for (int j = 0; j < 1024; j++) {
+                 uint32_t pt_entry = pt_phys[j];
+                 
+                 // Only free if Present and NOT a kernel page (sanity check)
+                 if ((pt_entry & I86_PTE_PRESENT) && (pt_entry & I86_PTE_USER)) {
+                     void* frame = (void*)(pt_entry & 0xFFFFF000);
+                     pmm_free_block(frame);
+                 }
+            }
+            
+            // 3. Free the Page Table itself
+            pmm_free_block(pt_phys);
+        }
+    }
+    // 4. Free the Directory itself
+    pmm_free_block(pd);
+}
+
+void vmm_switch_directory(page_directory_t* dir) {
+    if (!dir) return;
+    current_directory = dir;
+    vmm_load_pd((uint32_t*)dir->physicalAddr);
+}
+
+page_directory_t* vmm_get_current_directory() {
+    return current_directory;
+}
+
+void init_vmm() {
+    kernel_directory = (page_directory_t*)pmm_alloc_block();
+    memset(kernel_directory, 0, sizeof(page_directory_t));
+    kernel_directory->physicalAddr = (uint32_t)kernel_directory;
+
+    // FIX: Map 0-128MB as SUPERVISOR only (Remove I86_PTE_USER).
+    // This prevents Ring 3 processes from touching kernel memory.
+    uint32_t i = 0;
+    while (i < 128 * 1024 * 1024) {
+        // Flags: Present | Writable (0x3). NO User bit (0x4).
+        vmm_map_page_in_dir(kernel_directory, (void*)i, (void*)i, I86_PTE_PRESENT | I86_PTE_WRITABLE);
+        i += 4096;
+    }
+
+    vmm_switch_directory(kernel_directory);
+    serial_log(" [VMM] Identity Mapped 128MB (Supervisor Only).\n");
+}
+
+============================================================
+FILE PATH: ./src/mm/vmm.h
+============================================================
+/* src/mm/vmm.h */
+#ifndef VMM_H
+#define VMM_H
+
+#include <stdint.h>
+
+// Page Table Entry flags
+#define I86_PTE_PRESENT  0x1
+#define I86_PTE_WRITABLE 0x2
+#define I86_PTE_USER     0x4
+#define I86_PTE_ACCESSED 0x20
+#define I86_PTE_DIRTY    0x40
+
+#define PAGE_SIZE 4096
+
+// Struct for a Page Directory
+// In x86, this is just an array of 1024 32-bit physical addresses (plus flags)
+typedef struct {
+    uint32_t tablesPhysical[1024];
+    
+    // We can add virtual tracking arrays here if we want to track 
+    // virtual addresses of page tables, but for now we keep it simple.
+    // The physicalAddr field is useful for loading CR3.
+    uint32_t physicalAddr; 
+} __attribute__((aligned(4096))) page_directory_t;
+
+// --- Core VMM API ---
+void init_vmm();
+void vmm_map_page(void* phys, void* virt, int flags);
+void vmm_unmap_page(void* virt);
+void vmm_flush_tlb_entry(void* addr);
+
+// --- Multi-Process Support ---
+page_directory_t* vmm_create_address_space();
+void vmm_map_page_in_dir(page_directory_t* dir, void* phys, void* virt, int flags);
+void vmm_switch_directory(page_directory_t* dir);
+page_directory_t* vmm_get_current_directory();
+void* vmm_get_phys(uint32_t virt); // Helper for debugging
+
+// Assembly Helpers
+extern void vmm_load_pd(uint32_t* addr);
+extern uint32_t get_cr3();
+
+#endif
+
+============================================================
+FILE PATH: ./src/gui/wm.c
+============================================================
+/* src/gui/wm.c */
+#include "window.h"
+#include "../mm/heap.h"
+#include "../drivers/font.h"
+
+// Externs from graphics.c
+extern int screen_w;
+extern int screen_h;
+extern uint32_t* framebuffer; // Video Memory
+extern void draw_char(int x, int y, char c, uint32_t color);
+extern void put_pixel(int x, int y, uint32_t color);
+
+// The Backbuffer (Off-screen canvas)
+uint32_t* backbuffer = 0;
+
+// Window List
+window_t* head = 0;
+window_t* tail = 0; 
+
+void init_wm() {
+    // 1. Allocate Backbuffer
+    if (screen_w == 0 || screen_h == 0) return;
+    backbuffer = (uint32_t*)kmalloc(screen_w * screen_h * 4);
+    
+    // 2. Clear it to Blue
+    for (int i = 0; i < screen_w * screen_h; i++) {
+        backbuffer[i] = 0xFF0000AA; 
+    }
+}
+
+// Create a new window
+window_t* create_window(const char* title, int x, int y, int w, int h) {
+    window_t* win = (window_t*)kmalloc(sizeof(window_t));
+    
+    // Copy Title
+    int i = 0;
+    while(title[i] && i < 31) { win->title[i] = title[i]; i++; }
+    win->title[i] = 0;
+
+    win->x = x; win->y = y;
+    win->width = w; win->height = h;
+    win->is_dragging = 0;
+    win->cursor_x = 0;
+    win->cursor_y = 0;
+    win->text_color = 0xFF000000; 
+    win->bg_color = 0xFFCCCCCC;   
+    
+    // Allocate Window Content Buffer
+    win->buffer = (uint32_t*)kmalloc(w * h * 4);
+    for(int j=0; j<w*h; j++) win->buffer[j] = 0xFFCCCCCC; 
+
+    // Add to list
+    win->next = 0;
+    if (!head) {
+        head = win;
+        tail = win;
+    } else {
+        tail->next = win;
+        tail = win;
+    }
+    return win;
+}
+
+// Helper: Copy a rectangle to the backbuffer
+void wm_draw_rect_to_backbuffer(int x, int y, int w, int h, uint32_t color) {
+    for (int j = 0; j < h; j++) {
+        for (int i = 0; i < w; i++) {
+            int bx = x + i;
+            int by = y + j;
+            if (bx >= 0 && bx < screen_w && by >= 0 && by < screen_h) {
+                backbuffer[by * screen_w + bx] = color;
+            }
+        }
+    }
+}
+
+// The Compositor
+void wm_refresh() {
+    if (!backbuffer) return;
+
+    // 1. Draw Desktop Background
+    for (int i = 0; i < screen_w * screen_h; i++) backbuffer[i] = 0xFF0000AA;
+
+    // 2. Draw Windows
+    window_t* curr = head;
+    while (curr) {
+        // A. Draw Title Bar
+        wm_draw_rect_to_backbuffer(curr->x, curr->y - 20, curr->width, 20, 0xFF000088);
+        
+        // B. Draw Content
+        for (int j = 0; j < curr->height; j++) {
+            for (int i = 0; i < curr->width; i++) {
+                int screen_x = curr->x + i;
+                int screen_y = curr->y + j;
+                
+                if (screen_x >= 0 && screen_x < screen_w && screen_y >= 0 && screen_y < screen_h) {
+                    uint32_t color = curr->buffer[j * curr->width + i];
+                    backbuffer[screen_y * screen_w + screen_x] = color;
+                }
+            }
+        }
+        curr = curr->next;
+    }
+
+    // 3. Draw Mouse
+    extern int mouse_x, mouse_y;
+    int mx = mouse_x; int my = mouse_y;
+    for(int j=0; j<10; j++) {
+        for(int i=0; i<10; i++) {
+            if (i <= j) { 
+                int sx = mx + i; int sy = my + j;
+                if(sx < screen_w && sy < screen_h)
+                    backbuffer[sy * screen_w + sx] = 0xFFFFFFFF;
+            }
+        }
+    }
+
+    // 4. FLIP
+    for (int i = 0; i < screen_w * screen_h; i++) {
+        framebuffer[i] = backbuffer[i];
+    }
+}
+
+// THIS WAS MISSING: The function main.c calls!
+void wm_mouse_event(int x, int y, int left_click) {
+    static int prev_left_click = 0;
+    
+    // 1. Handle Dragging
+    window_t* curr = head;
+    while (curr) {
+        if (curr->is_dragging) {
+            if (left_click) {
+                curr->x = x - curr->drag_offset_x;
+                curr->y = y - curr->drag_offset_y;
+            } else {
+                curr->is_dragging = 0; 
+            }
+            return; // Don't click other windows while dragging
+        }
+        curr = curr->next;
+    }
+
+    // 2. Handle New Click (Hit Test)
+    if (left_click && !prev_left_click) {
+        curr = head;
+        while(curr) {
+            // Hit Title Bar? (y - 20 to y)
+            if (x >= curr->x && x < curr->x + curr->width &&
+                y >= curr->y - 20 && y < curr->y) {
+                
+                curr->is_dragging = 1;
+                curr->drag_offset_x = x - curr->x;
+                curr->drag_offset_y = y - curr->y;
+                break;
+            }
+            curr = curr->next;
+        }
+    }
+    prev_left_click = left_click;
+}
+
+// Helper: Scroll a specific window's buffer up
+void wm_scroll_window(window_t* win) {
+    int total_rows = win->height;
+    int scroll_height = 8; 
+
+    // 1. Move memory up
+    for (int i = 0; i < (total_rows - scroll_height) * win->width; i++) {
+        win->buffer[i] = win->buffer[i + (scroll_height * win->width)];
+    }
+
+    // 2. Clear bottom lines
+    int start_index = (total_rows - scroll_height) * win->width;
+    for (int i = start_index; i < total_rows * win->width; i++) {
+        win->buffer[i] = win->bg_color;
+    }
+
+    win->cursor_y -= 8;
+    if (win->cursor_y < 0) win->cursor_y = 0;
+}
+
+// Draw a character to a window
+void wm_putc(window_t* win, char c) {
+    if (!win) return;
+
+    if (c == '\n') {
+        win->cursor_x = 0;
+        win->cursor_y += 8;
+    } 
+    else if (c == '\b') {
+        if (win->cursor_x >= 8) {
+            win->cursor_x -= 8;
+            for(int dy=0; dy<8; dy++) {
+                for(int dx=0; dx<8; dx++) {
+                   int offset = (win->cursor_y + dy) * win->width + (win->cursor_x + dx);
+                   win->buffer[offset] = win->bg_color;
+                }
+            }
+        }
+    }
+    else {
+        if (win->cursor_x + 8 >= win->width) {
+            win->cursor_x = 0;
+            win->cursor_y += 8;
+        }
+
+        const uint8_t* glyph = font8x8_basic[(int)c];
+        for (int row = 0; row < 8; row++) {
+            for (int col = 0; col < 8; col++) {
+                if (glyph[row] & (1 << col)) {
+                    int offset = (win->cursor_y + row) * win->width + (win->cursor_x + (7-col));
+                    if (offset < win->width * win->height) {
+                        win->buffer[offset] = win->text_color;
+                    }
+                }
+            }
+        }
+        win->cursor_x += 8;
+    }
+
+    if (win->cursor_y + 8 >= win->height) {
+        wm_scroll_window(win);
+    }
+}
+
+// Print string to window
+void wm_print(window_t* win, const char* str) {
+    while (*str) {
+        wm_putc(win, *str++);
+    }
+}
+
+============================================================
+FILE PATH: ./src/gui/window.h
+============================================================
+#ifndef WINDOW_H
+#define WINDOW_H
+
+#include <stdint.h>
+
+typedef struct window {
+    int x, y;
+    int width, height;
+    char title[32];
+    uint32_t* buffer;
+    struct window* next;
+    
+    // Dragging state
+    int is_dragging;
+    int drag_offset_x;
+    int drag_offset_y;
+
+    // --- NEW: Terminal State ---
+    int cursor_x;
+    int cursor_y;
+    uint32_t text_color;
+    uint32_t bg_color;
+} window_t;
+
+void init_wm();
+window_t* create_window(const char* title, int x, int y, int w, int h);
+void wm_refresh(); // The "Compositor" function
+void wm_mouse_event(int x, int y, int left_click);
+
+#endif
+
+============================================================
+FILE PATH: ./src/cpu/isr_asm.S
+============================================================
+; src/cpu/isr_asm.S
+global isr_handler_32  ; Timer (IRQ0) is remapped to 32
+global isr_handler_33  ; Keyboard (IRQ1) is remapped to 33
+extern isr_handler     ; The C function we will call
+
+; Macro for defining interrupt stubs
+%macro ISR_NOERRCODE 1  ; For interrupts without error codes
+    global isr%1
+    isr%1:
+        cli             ; Disable interrupts
+        push 0          ; Push dummy error code
+        push %1         ; Push interrupt number
+        jmp isr_common_stub
+%endmacro
+
+; Define specific handlers we care about
+ISR_NOERRCODE 32
+ISR_NOERRCODE 33
+ISR_NOERRCODE 44
+ISR_NOERRCODE 128
+
+isr_common_stub:
+    pusha               ; Pushes edi,esi,ebp,esp,ebx,edx,ecx,eax
+
+    mov ax, ds          ; Lower 16-bits of eax = ds.
+    push eax            ; save the data segment descriptor
+
+    mov ax, 0x10        ; load the kernel data segment descriptor
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+
+    ; --- FIX START ---
+    push esp            ; 1. Push the POINTER to the stack (registers_t*)
+    call isr_handler    ; 2. Call the C function
+    add esp, 4          ; 3. Clean up the pointer we pushed
+    ; --- FIX END ---
+
+    pop eax             ; reload the original data segment descriptor
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+
+    popa                ; Pop edi,esi,ebp...
+    add esp, 8          ; Cleans up the pushed error code and ISR number
+    sti                 ; Re-enable interrupts
+    iret                ; return from interrupt
+
+; void switch_task(uint32_t *old_esp_ptr, uint32_t new_esp);
+global switch_task
+switch_task:
+    ; 1. Save the context of the OLD process
+    ; The C calling convention puts return addr at [esp], arg1 at [esp+4]
+    
+    mov eax, [esp+4]    ; Get pointer to old_esp_ptr (arg1)
+    mov edx, [esp+8]    ; Get new_esp (arg2)
+
+    pushf               ; Save EFLAGS
+    push cs             ; Save CS (conceptually, though we are in kernel)
+    push dword 0             ; Dummy EIP placeholder (not strictly needed here but keeps alignment)
+    
+    pusha               ; Save general purpose regs (EAX, ECX...)
+    
+    push ds
+    push es
+    push fs
+    push gs
+
+    ; Save the current ESP into the pointer provided (old_esp_ptr)
+    mov [eax], esp
+
+    ; 2. Load the context of the NEW process
+    mov esp, edx        ; SWITCH STACKS!
+
+    ; 3. Restore registers from the new stack
+    pop gs
+    pop fs
+    pop es
+    pop ds
+    
+    popa
+    
+    add esp, 4          ; Skip dummy EIP/Error code
+    add esp, 4          ; Skip CS
+    popf                ; Restore EFLAGS
+
+    ret                 ; Returns to the EIP saved on the NEW stack!
+
+; Helper to pop the IRET frame for new processes
+global jump_to_user
+jump_to_user:
+    iret
+
+============================================================
+FILE PATH: ./src/cpu/gdt_flush.S
+============================================================
+; src/cpu/gdt_flush.S
+global gdt_flush
+global tss_flush
+
+; ---------------------------------------------------
+; gdt_flush(uint32_t gdt_ptr)
+; Reloads the GDT and segment registers.
+; EXPECTS: 
+;   GDT Entry 1 (0x08) = Kernel Code
+;   GDT Entry 2 (0x10) = Kernel Data
+; ---------------------------------------------------
+gdt_flush:
+    mov eax, [esp+4]    ; Get the pointer argument
+    lgdt [eax]          ; Load the GDT Register
+
+    mov ax, 0x10        ; Offset 0x10 (Entry 2) -> Kernel Data Segment
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    mov ss, ax
+    
+    ; Perform a Far Jump to flush the pipeline and reload CS
+    jmp 0x08:.flush     ; Offset 0x08 (Entry 1) -> Kernel Code Segment
+.flush:
+    ret
+
+; ---------------------------------------------------
+; tss_flush()
+; Loads the Task Register (TR). 
+; Required for User Mode context switching.
+; EXPECTS:
+;   GDT Entry 5 (0x28) = TSS Entry
+; ---------------------------------------------------
+tss_flush:
+    mov ax, 0x28        ; Index 5 * 8 bytes = 40 = 0x28
+    ltr ax              ; Load Task Register
+    ret
+
+============================================================
+FILE PATH: ./src/cpu/idt.h
+============================================================
+/* src/cpu/idt.h */
+
+#ifndef IDT_H
+#define IDT_H
+
+#include <stdint.h>
+
+
+// Add this struct before the function declarations
+typedef struct {
+    uint32_t ds;                                     // Data segment selector
+    uint32_t edi, esi, ebp, esp, ebx, edx, ecx, eax; // Pushed by pusha
+    uint32_t int_no, err_code;                       // Interrupt number and error code
+    uint32_t eip, cs, eflags, useresp, ss;           // Pushed by the processor automatically
+} registers_t;
+// Initialize IDT and PIC
+void init_idt();
+
+// Struct for the IDT Register (similar to GDT ptr)
+typedef struct {
+    uint16_t limit;
+    uint32_t base;
+} __attribute__((packed)) idt_register_t;
+
+// Struct for an IDT Entry
+typedef struct {
+    uint16_t base_low;
+    uint16_t sel;        // Kernel Segment Selector (0x08)
+    uint8_t  always0;    // Always 0
+    uint8_t  flags;      // Flags (Present, Ring 0, etc)
+    uint16_t base_high;
+} __attribute__((packed)) idt_entry_t;
+
+#endif
+
+============================================================
+FILE PATH: ./src/cpu/idt.c
+============================================================
+/* src/cpu/idt.c */
+#include "idt.h"
+#include "../drivers/serial.h" 
+#include "../kernel/syscall.h" 
+
+extern void isr128(); // Syscall
+extern void isr32();  // Timer
+extern void isr33();  // Keyboard
+// NEW: Extern declaration for Mouse Interrupt Stub (must be in isr_asm.S)
+extern void isr44();  
+
+idt_entry_t idt[256];
+idt_register_t idt_reg;
+
+extern void keyboard_handler();
+extern void schedule();
+extern void mouse_handler();
+
+void set_idt_gate(int n, uint32_t handler) {
+    idt[n].base_low = handler & 0xFFFF;
+    idt[n].sel = 0x08; 
+    idt[n].always0 = 0;
+    idt[n].flags = 0x8E; 
+    idt[n].base_high = (handler >> 16) & 0xFFFF;
+}
+
+void remap_pic() {
+    outb(0x20, 0x11); outb(0xA0, 0x11);
+    outb(0x21, 0x20); outb(0xA1, 0x28); // Slave start 40 (0x28)
+    outb(0x21, 0x04); outb(0xA1, 0x02);
+    outb(0x21, 0x01); outb(0xA1, 0x01);
+    outb(0x21, 0x00); outb(0xA1, 0x00);
+}
+
+void init_idt() {
+    idt_reg.base = (uint32_t) &idt;
+    idt_reg.limit = 256 * sizeof(idt_entry_t) - 1;
+
+    remap_pic();
+
+    set_idt_gate(32, (uint32_t)isr32);
+    set_idt_gate(33, (uint32_t)isr33);
+    
+    // FIX: Map Mouse (IRQ 12 -> Int 44)
+    set_idt_gate(44, (uint32_t)isr44);
+
+    // Syscall
+    uint32_t handler = (uint32_t)isr128;
+    idt[128].base_low = handler & 0xFFFF;
+    idt[128].sel = 0x08;
+    idt[128].always0 = 0;
+    idt[128].flags = 0xEE; 
+    idt[128].base_high = (handler >> 16) & 0xFFFF;
+
+    __asm__ volatile("lidt (%0)" : : "r" (&idt_reg));
+    __asm__ volatile("sti");
+}
+
+void isr_handler(registers_t *regs) {
+    if (regs->int_no == 32) {
+        schedule();
+    }
+    else if (regs->int_no == 33) {
+        keyboard_handler();
+    }
+    // FIX: Handle Mouse
+    else if (regs->int_no == 44) {
+        mouse_handler();
+    }
+    else if (regs->int_no == 128) {
+        syscall_handler(regs);
+    }
+    
+    // ACK PIC
+    if (regs->int_no >= 32 && regs->int_no <= 47) {
+        if (regs->int_no >= 40) outb(0xA0, 0x20); // Slave ACK
+        outb(0x20, 0x20); // Master ACK
+    }
+}
+
+============================================================
+FILE PATH: ./src/cpu/gdt.h
+============================================================
+/* src/cpu/gdt.h */
+#ifndef GDT_H
+#define GDT_H
+#include <stdint.h>
+
+void init_gdt();
+
+// A struct describing a Task State Segment.
+typedef struct {
+    uint32_t prev_tss;   // The previous TSS - if we used hardware task switching this would form a linked list.
+    uint32_t esp0;       // The stack pointer to load when we change to kernel mode.
+    uint32_t ss0;        // The stack segment to load when we change to kernel mode.
+    uint32_t esp1;       // Unused...
+    uint32_t ss1;
+    uint32_t esp2;
+    uint32_t ss2;
+    uint32_t cr3;
+    uint32_t eip;
+    uint32_t eflags;
+    uint32_t eax;
+    uint32_t ecx;
+    uint32_t edx;
+    uint32_t ebx;
+    uint32_t esp;
+    uint32_t ebp;
+    uint32_t esi;
+    uint32_t edi;
+    uint32_t es;         
+    uint32_t cs;        
+    uint32_t ss;        
+    uint32_t ds;        
+    uint32_t fs;       
+    uint32_t gs;         
+    uint32_t ldt;      
+    uint16_t trap;
+    uint16_t iomap_base;
+} __attribute__((packed)) tss_entry_t;
+
+// Update TSS ESP0 (Called by the scheduler)
+void tss_set_stack(uint32_t kss, uint32_t kesp);
+
+#endif
+
+============================================================
+FILE PATH: ./src/cpu/gdt.c
+============================================================
+/* src/cpu/gdt.c */
+#include "gdt.h"
+
+// Define the GDT structures locally
+struct gdt_entry {
+    uint16_t limit_low;
+    uint16_t base_low;
+    uint8_t  base_middle;
+    uint8_t  access;
+    uint8_t  granularity;
+    uint8_t  base_high;
+} __attribute__((packed));
+
+struct gdt_ptr {
+    uint16_t limit;
+    uint32_t base;
+} __attribute__((packed));
+
+struct gdt_entry gdt[6]; // Null, KCode, KData, UCode, UData, TSS
+struct gdt_ptr gp;
+tss_entry_t tss_entry;
+
+extern void gdt_flush(uint32_t);
+extern void tss_flush(); 
+
+void gdt_set_gate(int num, uint32_t base, uint32_t limit, uint8_t access, uint8_t gran) {
+    gdt[num].base_low    = (base & 0xFFFF);
+    gdt[num].base_middle = (base >> 16) & 0xFF;
+    gdt[num].base_high   = (base >> 24) & 0xFF;
+    gdt[num].limit_low   = (limit & 0xFFFF);
+    gdt[num].granularity = ((limit >> 16) & 0x0F);
+    gdt[num].granularity |= (gran & 0xF0);
+    gdt[num].access      = access;
+}
+
+void write_tss(int num, uint16_t ss0, uint32_t esp0) {
+    uint32_t base = (uint32_t) &tss_entry;
+    uint32_t limit = sizeof(tss_entry);
+
+    // TSS Descriptor
+    // Access: Present (1), Ring 0 (00), Executable (0), Type (9 = Available TSS 32-bit) -> 0xE9?
+    // Actually standard TSS Byte: 10001001 = 0x89
+    // 0xE9 is for Ring 3? No, TSS is a system segment.
+    // Let's use 0xE9 for "Present, Ring 3, Accessed" if we want user to trigger it (rare)
+    // Standard kernel TSS: 0x89 (Present, Ring 0, Type 9)
+    gdt_set_gate(num, base, limit, 0x89, 0x00); 
+
+    // Zero out
+    uint8_t *p = (uint8_t *)&tss_entry;
+    for(int i=0; i<sizeof(tss_entry); i++) p[i] = 0;
+
+    tss_entry.ss0  = ss0; 
+    tss_entry.esp0 = esp0; 
+    
+    // I/O Map Base > Limit disables I/O permission bitmap
+    tss_entry.iomap_base = sizeof(tss_entry);
+}
+
+void init_gdt() {
+    gp.limit = (sizeof(struct gdt_entry) * 6) - 1;
+    gp.base  = (uint32_t)&gdt;
+
+    // 0: Null
+    gdt_set_gate(0, 0, 0, 0, 0);
+
+    // 1: Kernel Code (0x08)
+    // Base=0, Limit=4GB, Access=0x9A (Present, Ring0, Code, Read), Gran=0xCF (4KB blocks)
+    gdt_set_gate(1, 0, 0xFFFFFFFF, 0x9A, 0xCF);
+
+    // 2: Kernel Data (0x10)
+    // Access=0x92 (Present, Ring0, Data, Write)
+    gdt_set_gate(2, 0, 0xFFFFFFFF, 0x92, 0xCF);
+
+    // 3: User Code (0x18)
+    // Access=0xFA (Present, Ring3, Code, Read)
+    gdt_set_gate(3, 0, 0xFFFFFFFF, 0xFA, 0xCF);
+
+    // 4: User Data (0x20)
+    // Access=0xF2 (Present, Ring3, Data, Write)
+    gdt_set_gate(4, 0, 0xFFFFFFFF, 0xF2, 0xCF);
+
+    // 5: TSS (0x28)
+    // Initial Kernel Stack is arbitrary, will be updated by scheduler
+    write_tss(5, 0x10, 0x0);
+
+    gdt_flush((uint32_t)&gp);
+    tss_flush(); // Load TR register
+}
+
+// Critical: Called by scheduler to update Kernel Stack for the NEXT interrupt
+void tss_set_stack(uint32_t kss, uint32_t kesp) {
+    tss_entry.ss0 = kss;
+    tss_entry.esp0 = kesp;
+}
+
+============================================================
+FILE PATH: ./src/drivers/font.c
+============================================================
+#include "font.h" 
+extern void put_pixel(int x, int y, uint32_t color);
+
+void draw_char(int x, int y, char c, uint32_t color) {
+    // Safety check for array bounds
+    if (c < 0) return; 
+
+    const uint8_t* glyph = font8x8_basic[(int)c];
+
+    for (int row = 0; row < 8; row++) {
+        for (int col = 0; col < 8; col++) {
+            // Check if the bit at this column is set
+            // (1 << col) or (0x80 >> col) depending on font orientation
+            // Standard VGA is usually MSB left.
+            if (glyph[row] & (1 << col)) {
+                 put_pixel(x + (7-col), y + row, color);
+            }
+        }
+    }
+}
+
+void draw_string(int x, int y, const char* str, uint32_t color) {
+    int cursor_x = x;
+    while (*str) {
+        draw_char(cursor_x, y, *str, color);
+        cursor_x += 10; // 8px char + 2px padding
+        str++;
+    }
+}
+
+============================================================
+FILE PATH: ./src/drivers/font.h
+============================================================
+#ifndef FONT_H
+#define FONT_H
+#include <stdint.h>
+
+// 8x8 Bitmap Font (Basic ASCII set)
+// 1 = Pixel On, 0 = Pixel Off
+static const uint8_t font8x8_basic[128][8] = {
+    { 0,0,0,0,0,0,0,0 }, // Space (32)
+    { 0x18, 0x3C, 0x3C, 0x3C, 0x18, 0x18, 0x00, 0x18 }, // !
+    { 0x66, 0x66, 0x22, 0x00, 0x00, 0x00, 0x00, 0x00 }, // "
+    // ... [Numbers]
+    { 0x3C, 0x66, 0x66, 0x6E, 0x76, 0x66, 0x66, 0x3C }, // 0 (48)
+    { 0x18, 0x18, 0x38, 0x18, 0x18, 0x18, 0x18, 0x7E }, // 1
+    { 0x3C, 0x66, 0x06, 0x0C, 0x30, 0x60, 0x66, 0x7E }, // 2
+    // ... [Letters A-C for demo, fill in others if needed]
+    { 0x18, 0x3C, 0x66, 0x66, 0x7E, 0x66, 0x66, 0x00 }, // A (65)
+    { 0x7C, 0x66, 0x66, 0x7C, 0x66, 0x66, 0x7C, 0x00 }, // B
+    { 0x3C, 0x66, 0x03, 0x03, 0x03, 0x66, 0x3C, 0x00 }, // C
+    // ... [Fill the rest or use a generator]
+};
+
+// NOTE: For a full font, search "VGA 8x8 font C array" on GitHub 
+// and paste it here. For now, this lets you see "A", "B", "C", "1", "2"!
+#endif
+
+============================================================
+FILE PATH: ./src/drivers/vga.h
+============================================================
+/* src/drivers/vga.h */
+#ifndef VGA_H
+#define VGA_H
+
+#include <stdint.h>
+
+void vga_clear();
+void vga_print(const char* str);
+void vga_putc(char c);
+
+#endif
+
+============================================================
+FILE PATH: ./src/drivers/serial.h
+============================================================
+/* src/drivers/serial.h */
+#ifndef SERIAL_H
+#define SERIAL_H
+
+#include <stdint.h>
+
+// Initialize the serial port
+void init_serial();
+
+// Write a string to the serial port
+void serial_log(char *str);
+
+// Write a single character
+void serial_write_char(char c);
+
+// I/O Port wrappers (used by IDT and others)
+void outb(uint16_t port, uint8_t val);
+uint8_t inb(uint16_t port);
+
+#endif
+
+============================================================
+FILE PATH: ./src/drivers/graphics.c
+============================================================
+/* src/drivers/graphics.c */
+#include <stdint.h>
+#include "../kernel/multiboot.h"
+#include "../mm/vmm.h" // Ensures vmm_map_page is available
+
+uint32_t* framebuffer = 0;
+int screen_w = 0;
+int screen_h = 0;
+int screen_pitch = 0; 
+int screen_bpp = 0;
+
+// VMM Helper defined in vmm.c
+extern void vmm_map_page(void* phys, void* virt, int flags);
+
+void put_pixel(int x, int y, uint32_t color) {
+    // Basic bounds check
+    if (x < 0 || x >= screen_w || y < 0 || y >= screen_h) return;
+    
+    // Calculate offset: y * (bytes_per_row) + x * (bytes_per_pixel)
+    // We assume 32-bpp (4 bytes) for simplicity here. 
+    // If pitch is in bytes, we divide by 4 to get uint32 index.
+    uint32_t index = y * (screen_pitch / 4) + x;
+    framebuffer[index] = color;
+}
+
+// Function to clear screen fast
+void graphics_clear(uint32_t color) {
+    uint32_t size = screen_w * screen_h;
+    for(uint32_t i=0; i<size; i++) framebuffer[i] = color;
+}
+
+void init_graphics(multiboot_info_t* mboot) {
+    if (!(mboot->flags & (1 << 12))) return; // No VBE info
+
+    screen_w = mboot->framebuffer_width;
+    screen_h = mboot->framebuffer_height;
+    screen_pitch = mboot->framebuffer_pitch;
+    screen_bpp = mboot->framebuffer_bpp;
+    
+    uint32_t fb_phys = (uint32_t)mboot->framebuffer_addr;
+    uint32_t fb_size = screen_h * screen_pitch;
+    
+    // Map the Framebuffer into Virtual Memory
+    // We Map it 1:1 (Virt = Phys) for simplicity, or to a high address.
+    // Mapping 1:1 is dangerous if it overlaps kernel code, but usually FB is at 0xE0000000+
+    
+    for (uint32_t offset = 0; offset < fb_size; offset += 4096) {
+        // Map as Kernel RW (0x3 = Present | RW)
+        // If we want User to draw directly (bad idea), use 0x7.
+        vmm_map_page((void*)(fb_phys + offset), (void*)(fb_phys + offset), 0x3); 
+    }
+
+    framebuffer = (uint32_t*)fb_phys;
+    
+    // Clear to black
+    graphics_clear(0xFF000000);
+}
+
+============================================================
+FILE PATH: ./src/drivers/vga.c
+============================================================
+/* src/drivers/vga.c */
+#include <stdint.h>
+#include <stddef.h>
+#include "serial.h" 
+#include "vga.h"
+
+// Video Memory
+volatile uint16_t* vga_buffer = (uint16_t*)0xB8000;
+const int VGA_COLS = 80;
+const int VGA_ROWS = 25;
+
+int term_col = 0;
+int term_row = 0;
+uint8_t term_color = 0x0F; 
+
+void vga_update_cursor(int x, int y) {
+	uint16_t pos = y * VGA_COLS + x;
+	outb(0x3D4, 0x0F);
+	outb(0x3D5, (uint8_t) (pos & 0xFF));
+	outb(0x3D4, 0x0E);
+	outb(0x3D5, (uint8_t) ((pos >> 8) & 0xFF));
+}
+
+void vga_clear() {
+    for (int col = 0; col < VGA_COLS; col++) {
+        for (int row = 0; row < VGA_ROWS; row++) {
+            const size_t index = (row * VGA_COLS) + col;
+            vga_buffer[index] = ((uint16_t)term_color << 8) | ' ';
+        }
+    }
+    term_col = 0;
+    term_row = 0;
+    vga_update_cursor(0, 0);
+}
+
+void vga_scroll() {
+    for (int row = 1; row < VGA_ROWS; row++) {
+        for (int col = 0; col < VGA_COLS; col++) {
+            int old_index = (row * VGA_COLS) + col;
+            int new_index = ((row - 1) * VGA_COLS) + col;
+            vga_buffer[new_index] = vga_buffer[old_index];
+        }
+    }
+    for (int col = 0; col < VGA_COLS; col++) {
+        int index = ((VGA_ROWS - 1) * VGA_COLS) + col;
+        vga_buffer[index] = ((uint16_t)term_color << 8) | ' ';
+    }
+    term_row = VGA_ROWS - 1;
+}
+
+void vga_putc(char c) {
+    if (c == '\n') {
+        term_col = 0;
+        term_row++;
+    } 
+    else if (c == '\b') {
+        if (term_col > 0) term_col--;
+        int index = (term_row * VGA_COLS) + term_col;
+        vga_buffer[index] = ((uint16_t)term_color << 8) | ' ';
+    }
+    else {
+        int index = (term_row * VGA_COLS) + term_col;
+        vga_buffer[index] = ((uint16_t)term_color << 8) | c;
+        term_col++;
+    }
+
+    if (term_col >= VGA_COLS) {
+        term_col = 0;
+        term_row++;
+    }
+    if (term_row >= VGA_ROWS) {
+        vga_scroll();
+    }
+    
+    vga_update_cursor(term_col, term_row);
+}
+
+void vga_print(const char* str) {
+    for (int i = 0; str[i] != '\0'; i++) {
+        vga_putc(str[i]);
+    }
+}
+
+============================================================
+FILE PATH: ./src/drivers/ata.h
+============================================================
+#ifndef ATA_H
+#define ATA_H
+
+#include <stdint.h>
+
+// Initialize ATA driver (identifies drive)
+void init_ata();
+
+// Read sectors from disk into a buffer
+// target: Buffer to store data
+// lba: Logical Block Address (Sector number, starts at 0)
+// sector_count: How many sectors to read
+void ata_read_sectors(uint32_t lba, uint8_t count, uint32_t* target);
+
+// Write sectors from a buffer to disk
+void ata_write_sectors(uint32_t lba, uint8_t count, uint32_t* source);
+
+#endif
+
+============================================================
+FILE PATH: ./src/drivers/ata.c
+============================================================
+/* src/drivers/ata.c */
+#include "ata.h"
+#include "serial.h"
+
+// Extern scheduler
+extern void schedule(); 
+
+#define ATA_DATA        0x1F0
+#define ATA_ERROR       0x1F1
+#define ATA_SEC_COUNT   0x1F2
+#define ATA_LBA_LO      0x1F3
+#define ATA_LBA_MID     0x1F4
+#define ATA_LBA_HI      0x1F5
+#define ATA_DRIVE_HEAD  0x1F6
+#define ATA_STATUS      0x1F7
+#define ATA_COMMAND     0x1F7
+
+#define CMD_READ_PIO    0x20
+#define CMD_WRITE_PIO   0x30
+#define CMD_FLUSH_CACHE 0xE7
+#define STATUS_BSY      0x80
+#define STATUS_DRQ      0x08 
+#define STATUS_ERR      0x01
+
+void ata_wait_busy() {
+    // FIX: Yield CPU while waiting
+    while (inb(ATA_STATUS) & STATUS_BSY) {
+        schedule();
+    }
+}
+
+void ata_wait_drq() {
+    // FIX: Yield CPU while waiting
+    while (!(inb(ATA_STATUS) & STATUS_DRQ)) {
+        schedule();
+    }
+}
+
+uint16_t insw(uint16_t port) {
+    uint16_t ret;
+    __asm__ volatile ("inw %1, %0" : "=a"(ret) : "Nd"(port));
+    return ret;
+}
+
+void outsw(uint16_t port, uint16_t val) {
+    __asm__ volatile ("outw %0, %1" : : "a"(val), "Nd"(port));
+}
+
+void init_ata() {
+    outb(ATA_DRIVE_HEAD, 0xA0);
+    outb(ATA_SEC_COUNT, 0);
+    outb(ATA_LBA_LO, 0);
+    outb(ATA_LBA_MID, 0);
+    outb(ATA_LBA_HI, 0);
+    outb(ATA_COMMAND, 0xEC); 
+
+    uint8_t status = inb(ATA_STATUS);
+    if (status == 0) {
+        serial_log(" [ATA] No drive found.\n");
+        return;
+    }
+    
+    ata_wait_busy();
+    for(int i = 0; i < 256; i++) {
+        insw(ATA_DATA);
+    }
+    serial_log(" [ATA] Primary Master Drive initialized.\n");
+}
+
+void ata_read_sectors(uint32_t lba, uint8_t count, uint32_t* target) {
+    ata_wait_busy();
+    outb(ATA_DRIVE_HEAD, 0xE0 | ((lba >> 24) & 0x0F));
+    outb(ATA_SEC_COUNT, count);
+    outb(ATA_LBA_LO, (uint8_t) lba);
+    outb(ATA_LBA_MID, (uint8_t)(lba >> 8));
+    outb(ATA_LBA_HI, (uint8_t)(lba >> 16));
+    outb(ATA_COMMAND, CMD_READ_PIO);
+
+    uint16_t* t = (uint16_t*) target;
+    for (int j = 0; j < count; j++) {
+        ata_wait_busy();
+        ata_wait_drq();
+        for (int i = 0; i < 256; i++) {
+            t[i] = insw(ATA_DATA);
+        }
+        t += 256;
+    }
+}
+
+void ata_write_sectors(uint32_t lba, uint8_t count, uint32_t* source) {
+    ata_wait_busy();
+    outb(ATA_DRIVE_HEAD, 0xE0 | ((lba >> 24) & 0x0F));
+    outb(ATA_SEC_COUNT, count);
+    outb(ATA_LBA_LO, (uint8_t) lba);
+    outb(ATA_LBA_MID, (uint8_t)(lba >> 8));
+    outb(ATA_LBA_HI, (uint8_t)(lba >> 16));
+    outb(ATA_COMMAND, CMD_WRITE_PIO);
+
+    uint16_t* s = (uint16_t*) source;
+    for (int j = 0; j < count; j++) {
+        ata_wait_busy();
+        ata_wait_drq();
+        for (int i = 0; i < 256; i++) {
+            outsw(ATA_DATA, s[i]);
+        }
+        outb(ATA_COMMAND, CMD_FLUSH_CACHE);
+        s += 256;
+    }
+}
+
+============================================================
+FILE PATH: ./src/drivers/serial.c
+============================================================
+/* src/drivers/serial.c */
+#include "serial.h"
+
+#define COM1 0x3F8
+
+void outb(uint16_t port, uint8_t val) {
+    __asm__ volatile ( "outb %0, %1" : : "a"(val), "Nd"(port) );
+}
+
+uint8_t inb(uint16_t port) {
+    uint8_t ret;
+    __asm__ volatile ( "inb %1, %0" : "=a"(ret) : "Nd"(port) );
+    return ret;
+}
+
+void init_serial() {
+    outb(COM1 + 1, 0x00);    // Disable interrupts
+    outb(COM1 + 3, 0x80);    // Enable DLAB
+    outb(COM1 + 0, 0x03);    // 38400 baud
+    outb(COM1 + 1, 0x00);
+    outb(COM1 + 3, 0x03);    // 8 bits, no parity
+    outb(COM1 + 2, 0xC7);    // FIFO
+    outb(COM1 + 4, 0x0B);    // IRQs enabled
+}
+
+int is_transmit_empty() {
+    return inb(COM1 + 5) & 0x20;
+}
+
+void serial_write_char(char a) {
+    int timeout = 10000;
+    while (is_transmit_empty() == 0 && timeout > 0) {
+        timeout--;
+    }
+    outb(COM1, a);
+}
+
+void serial_log(char *str) {
+    if (!str) return;
+    for (int i = 0; str[i] != 0; i++) {
+        serial_write_char(str[i]);
+    }
+}
+
+============================================================
+FILE PATH: ./src/drivers/mouse.c
+============================================================
+/* src/drivers/mouse.c */
+#include <stdint.h>
+#include "serial.h" 
+#include "../cpu/idt.h" 
+
+// Externs from graphics.c
+extern int screen_w;
+extern int screen_h;
+
+// Mouse State (Global)
+int mouse_x = 0; 
+int mouse_y = 0;
+int mouse_left_button = 0;
+int mouse_right_button = 0;
+
+static uint8_t mouse_cycle = 0;     
+static int8_t  mouse_byte[3];
+
+void mouse_wait(uint8_t type) {
+    uint32_t time_out = 100000;
+    if (type == 0) {
+        while (time_out--) { if ((inb(0x64) & 1) == 1) return; }
+    } else {
+        while (time_out--) { if ((inb(0x64) & 2) == 0) return; }
+    }
+}
+
+void mouse_write(uint8_t write) {
+    mouse_wait(1);
+    outb(0x64, 0xD4);
+    mouse_wait(1);
+    outb(0x60, write);
+}
+
+uint8_t mouse_read() {
+    mouse_wait(0);
+    return inb(0x60);
+}
+
+// The Interrupt Handler
+void mouse_handler() {
+    uint8_t status = inb(0x64);
+    if (!(status & 0x20)) return;
+
+    uint8_t val = inb(0x60);
+    mouse_byte[mouse_cycle++] = val;
+
+    if (mouse_cycle == 3) { 
+        mouse_cycle = 0;
+
+        // Packet Format:
+        // Byte 0: Y_Over X_Over Y_Sign X_Sign 1 Middle Right Left
+        uint8_t flags = mouse_byte[0];
+        int8_t x_rel = mouse_byte[1];
+        int8_t y_rel = mouse_byte[2];
+
+        // Button State
+        mouse_left_button = (flags & 0x01);
+        mouse_right_button = (flags & 0x02);
+
+        // Movement (Handle overflow bits if you want perfection, skipping for simplicity)
+        // Note: Some PS/2 mice send 9-bit values. This is "good enough" for now.
+        
+        mouse_x += x_rel;
+        mouse_y -= y_rel; // Y is inverted in PS/2
+
+        // Clamp to Screen Dimensions
+        if (mouse_x < 0) mouse_x = 0;
+        if (mouse_x >= screen_w - 1) mouse_x = screen_w - 1;
+        
+        if (mouse_y < 0) mouse_y = 0;
+        if (mouse_y >= screen_h - 1) mouse_y = screen_h - 1;
+
+        // CRITICAL: Do NOT draw here. The compositor (wm.c) will see the new x/y 
+        // and draw it on the next frame refresh.
+    }
+}
+
+void init_mouse() {
+    // Defaults if screen is not initialized yet
+    if (screen_w == 0) { screen_w = 1024; screen_h = 768; }
+    mouse_x = screen_w / 2;
+    mouse_y = screen_h / 2;
+
+    mouse_wait(1);
+    outb(0x64, 0xA8); // Enable Aux
+    mouse_wait(1);
+    outb(0x64, 0x20); // Get Status
+    uint8_t status = mouse_read();
+    status |= 2;      // Enable IRQ12
+    status &= ~0x20;  // Disable Clock
+    mouse_wait(1);
+    outb(0x64, 0x60); // Set Status
+    mouse_wait(1);
+    outb(0x60, status);
+
+    mouse_write(0xF6); // Reset
+    mouse_read();
+    mouse_write(0xF4); // Enable Streaming
+    mouse_read();
+}
+
+============================================================
+FILE PATH: ./src/drivers/rtc.c
+============================================================
+#include <stdint.h>
+#include "serial.h" // for outb/inb
+
+// Time Structure
+typedef struct {
+    uint8_t second;
+    uint8_t minute;
+    uint8_t hour;
+    uint8_t day;
+    uint8_t month;
+    uint16_t year;
+} rtc_time_t;
+
+int rtc_updating() {
+    outb(0x70, 0x0A);
+    return (inb(0x71) & 0x80);
+}
+
+uint8_t read_register(int reg) {
+    outb(0x70, reg);
+    return inb(0x71);
+}
+
+// Convert BCD to Binary (e.g., 0x15 -> 15)
+uint8_t bcd_to_bin(uint8_t val) {
+    return (val & 0x0F) + ((val / 16) * 10);
+}
+
+void get_rtc_time(rtc_time_t* t) {
+    // Wait until RTC is stable (not updating)
+    while (rtc_updating());
+
+    uint8_t sec = read_register(0x00);
+    uint8_t min = read_register(0x02);
+    uint8_t hour = read_register(0x04);
+    uint8_t day = read_register(0x07);
+    uint8_t month = read_register(0x08);
+    uint8_t year = read_register(0x09);
+    uint8_t registerB = read_register(0x0B);
+
+    // Convert BCD if necessary (Check bit 2 of Register B)
+    if (!(registerB & 0x04)) {
+        t->second = bcd_to_bin(sec);
+        t->minute = bcd_to_bin(min);
+        // Handle 12-hour clock bit (0x80) if necessary (omitted for brevity)
+        t->hour   = bcd_to_bin(hour); 
+        t->day    = bcd_to_bin(day);
+        t->month  = bcd_to_bin(month);
+        t->year   = bcd_to_bin(year) + 2000; // Assume 21st century
+    } else {
+        t->second = sec;
+        t->minute = min;
+        t->hour   = hour;
+        t->day    = day;
+        t->month  = month;
+        t->year   = year + 2000;
+    }
+}
+
+============================================================
+FILE PATH: ./src/drivers/keyboard.c
+============================================================
+#include <stdint.h>
+#include "../drivers/vga.h"
+#include "../kernel/process.h"
+#include <stdbool.h>
+
+extern uint8_t inb(uint16_t port);
+bool shift_pressed = false;
+bool caps_lock = false;
+
+// --- Circular Buffer ---
+#define KBD_BUFFER_SIZE 256
+char kbd_buffer[KBD_BUFFER_SIZE];
+volatile int read_ptr = 0;
+volatile int write_ptr = 0;
+
+void kbd_buffer_write(char c) {
+    int next_write = (write_ptr + 1) % KBD_BUFFER_SIZE;
+    if (next_write != read_ptr) { 
+        kbd_buffer[write_ptr] = c;
+        write_ptr = next_write;
+    }
+}
+
+char kbd_buffer_read() {
+    if (read_ptr == write_ptr) return 0;
+    char c = kbd_buffer[read_ptr];
+    read_ptr = (read_ptr + 1) % KBD_BUFFER_SIZE;
+    return c;
+}
+
+// Lowercase / Default Map
+char kbd_US_low[128] = {
+    0,  27, '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', '\b',
+  '\t', 'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p', '[', ']', '\n',
+    0,  'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', '\'', '`',   0,
+  '\\', 'z', 'x', 'c', 'v', 'b', 'n', 'm', ',', '.', '/',   0,
+  '*', 0, ' ', 0,
+  // ... (rest is 0)
+  // Maps Arrow Keys to special codes (keep your 0x11/0x12 mapping here)
+  [72] = 0x11, [80] = 0x12
+};
+
+// Shifted Map (Symbols & Capitals)
+char kbd_US_high[128] = {
+    0,  27, '!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '_', '+', '\b',
+  '\t', 'Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P', '{', '}', '\n',
+    0,  'A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L', ':', '\"', '~',   0,
+  '|',  'Z', 'X', 'C', 'V', 'B', 'N', 'M', '<', '>', '?',   0,
+  '*', 0, ' ', 0,
+  // ...
+};
+
+void keyboard_handler() {
+    uint8_t scancode = inb(0x60);
+    
+    // Ignore prefix bytes
+    if (scancode == 0xE0) return;
+
+    // KEY RELEASED (Top bit set)
+    if (scancode & 0x80) {
+        uint8_t released = scancode & 0x7F;
+        if (released == 42 || released == 54) { // Left/Right Shift
+            shift_pressed = false;
+        }
+        return;
+    }
+
+    // KEY PRESSED
+    // Check Shifters
+    if (scancode == 42 || scancode == 54) {
+        shift_pressed = true;
+        return;
+    }
+    if (scancode == 58) { // Caps Lock
+        caps_lock = !caps_lock;
+        return;
+    }
+
+    if (scancode < 128) {
+        char c = 0;
+        
+        // Logic: Shift XOR CapsLock (for letters)
+        // For symbols (like '1' -> '!'), CapsLock usually doesn't apply.
+        
+        bool use_shift_map = shift_pressed;
+        
+        // Simple logic: If it's a letter and Caps is on, toggle shift effect
+        // (Checking if scancode is in letter range is tedious, let's keep it simple)
+        // If CAPS is on, we treat letters as shifted, but numbers as unshifted.
+        
+        if (shift_pressed) {
+            c = kbd_US_high[scancode];
+        } else {
+            c = kbd_US_low[scancode];
+            // Apply Caps Lock just to letters (a-z)
+            if (caps_lock && c >= 'a' && c <= 'z') {
+                c -= 32; // Convert to upper
+            }
+        }
+
+        if (c != 0) {
+            kbd_buffer_write(c);
+            process_unblock(1);
+        }
+    }
+}
