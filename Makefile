@@ -1,8 +1,10 @@
 # Makefile - Final "Deep Tech" Version
 # Ensure $HOME/opt/cross/bin is in your PATH
 
-CC = i686-elf-gcc
-LD = i686-elf-ld
+# Use system compiler
+CC = gcc
+# Use system linker
+LD = ld
 NASM = nasm 
 
 # --- Compiler Flags ---
@@ -105,13 +107,13 @@ my-os.iso: my-kernel.elf limine hello.elf echo.elf
 	rm -rf iso_root
 	mkdir -p iso_root
 	cp my-kernel.elf iso_root/
-	# Create a test text file
+# Create a test text file
 	echo "Hello from the filesystem! This text is loaded from disk." > iso_root/test.txt
-	# Copy Config and Programs
+# Copy Config and Programs
 	cp limine.conf iso_root/
 	cp hello.elf iso_root/
 	cp echo.elf iso_root/
-	# Install Limine
+# Install Limine
 	cp limine/limine-bios.sys limine/limine-bios-cd.bin limine/limine-uefi-cd.bin iso_root/
 	xorriso -as mkisofs -b limine-bios-cd.bin \
 		-no-emul-boot -boot-load-size 4 -boot-info-table \
@@ -123,7 +125,10 @@ my-os.iso: my-kernel.elf limine hello.elf echo.elf
 # --- Run ---
 
 run: my-os.iso disk.img
-	qemu-system-i386 -cdrom my-os.iso -drive file=disk.img,format=raw,index=0,media=disk -serial stdio -no-reboot -no-shutdown
+# -d int,cpu_reset: Log interrupts and CPU resets (Triple Faults)
+# -D qemu.log: Save logs to a file instead of crashing the terminal
+# Removed -no-reboot -no-shutdown to prevent the QEMU crash
+	qemu-system-i386 -cdrom my-os.iso -drive file=disk.img,format=raw,index=0,media=disk -serial file:serial.log -d int,cpu_reset -D qemu.log
 
 clean:
 	rm -rf src/**/*.o src/kernel/*.o src/cpu/*.o src/drivers/*.o src/mm/*.o

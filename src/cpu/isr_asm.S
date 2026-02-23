@@ -1,23 +1,59 @@
 ; src/cpu/isr_asm.S
-global isr_handler_32  ; Timer (IRQ0) is remapped to 32
-global isr_handler_33  ; Keyboard (IRQ1) is remapped to 33
-extern isr_handler     ; The C function we will call
 
-; Macro for defining interrupt stubs
-%macro ISR_NOERRCODE 1  ; For interrupts without error codes
+extern isr_handler
+
+; 1. Define ISRs that DO NOT push an error code (e.g., Timer, Div by Zero)
+; We push a dummy '0' so the stack layout is consistent.
+%macro ISR_NOERRCODE 1
     global isr%1
     isr%1:
-        cli             ; Disable interrupts
+        cli
         push 0          ; Push dummy error code
         push %1         ; Push interrupt number
         jmp isr_common_stub
 %endmacro
+
+; 2. Define ISRs that DO push an error code (e.g., Page Fault, GPF)
+; The CPU has already pushed the error code, so we just push the INT number.
+%macro ISR_ERRCODE 1
+    global isr%1
+    isr%1:
+        cli
+        ; Error code is already on stack!
+        push %1         ; Push interrupt number
+        jmp isr_common_stub
+%endmacro
+
+; --- Define the Exception Handlers (0-31) ---
+ISR_NOERRCODE 0   ; Divide by Zero
+ISR_NOERRCODE 1   ; Debug
+ISR_NOERRCODE 2   ; NMI
+ISR_NOERRCODE 3   ; Breakpoint
+ISR_NOERRCODE 4   ; Overflow
+ISR_NOERRCODE 5   ; Bound Range Exceeded
+ISR_NOERRCODE 6   ; Invalid Opcode
+ISR_NOERRCODE 7   ; Device Not Available
+ISR_ERRCODE   8   ; Double Fault (Has Error Code!)
+ISR_NOERRCODE 9   ; Coprocessor Segment Overrun
+ISR_ERRCODE   10  ; Invalid TSS
+ISR_ERRCODE   11  ; Segment Not Present
+ISR_ERRCODE   12  ; Stack-Segment Fault
+ISR_ERRCODE   13  ; General Protection Fault
+ISR_ERRCODE   14  ; Page Fault (Has Error Code!)
+ISR_NOERRCODE 15  ; Reserved
+ISR_NOERRCODE 16  ; x87 Floating-Point Exception
+ISR_ERRCODE   17  ; Alignment Check
+ISR_NOERRCODE 18  ; Machine Check
+ISR_NOERRCODE 19  ; SIMD Floating-Point Exception
+ISR_NOERRCODE 20  ; Virtualization Exception
 
 ; Define specific handlers we care about
 ISR_NOERRCODE 32
 ISR_NOERRCODE 33
 ISR_NOERRCODE 44
 ISR_NOERRCODE 128
+ISR_NOERRCODE 46  ; IRQ 14 (Primary IDE)
+ISR_NOERRCODE 47  ; IRQ 15 (Secondary IDE)
 
 isr_common_stub:
     pusha               ; Pushes edi,esi,ebp,esp,ebx,edx,ecx,eax
