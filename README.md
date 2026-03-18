@@ -1,4 +1,3 @@
-```markdown
 # MyOS
 
 A custom, bare-metal 32-bit x86 operating system written in C and Assembly. This project features a graphical window manager, cooperative multitasking, custom PS/2 device drivers, and a standalone userland environment bootstrapped via the Multiboot1 protocol.
@@ -80,4 +79,3 @@ The Makefile is configured to output kernel debugging information over the seria
 * `programs/` - Userland C applications, assembly entry points, and the custom standard library.
 * `limine.conf` - Bootloader configuration specifying the kernel and Multiboot modules.
 * `linker.ld` - Kernel linker script ensuring proper memory alignment and Multiboot header placement.
-```
