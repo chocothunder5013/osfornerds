@@ -1,4 +1,4 @@
-; src/kernel/boot.S
+    ; src/kernel/boot.S
 MBALIGN  equ  1 << 0
 MEMINFO  equ  1 << 1
 VIDEO    equ  1 << 2  ; <--- NEW: Request Video Mode
@@ -7,12 +7,12 @@ MAGIC    equ  0x1BADB002
 CHECKSUM equ -(MAGIC + FLAGS)
 
 section .multiboot
-align 4
+    align 4
     dd MAGIC
     dd FLAGS
     dd CHECKSUM
     dd 0, 0, 0, 0, 0 ; Header Address fields (unused if not generic)
-    
+
     ; --- NEW: Video Request Fields ---
     dd 0             ; Mode Type (0 = Linear Graphics)
     dd 1024          ; Width
@@ -20,7 +20,7 @@ align 4
     dd 32            ; Depth (Bits per pixel)
 
 section .bss
-align 16
+    align 16
 stack_bottom:
     resb 16384
 stack_top:
@@ -31,13 +31,13 @@ extern kmain
 
 _start:
     mov esp, stack_top
-    
+
     ; Push eax and ebx, plus some dummy padding to maintain 16-byte alignment
     ; esp is currently 16-byte aligned.
     sub esp, 8      ; Padding
     push eax        ; Multiboot Magic Number
     push ebx        ; Multiboot Info Struct pointer
-    
+
     cli
     call kmain
 .hang:
