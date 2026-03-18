@@ -5,7 +5,6 @@
 
 #include <stdint.h>
 
-
 // Add this struct before the function declarations
 typedef struct {
     uint32_t ds;                                     // Data segment selector
@@ -25,9 +24,9 @@ typedef struct {
 // Struct for an IDT Entry
 typedef struct {
     uint16_t base_low;
-    uint16_t sel;        // Kernel Segment Selector (0x08)
-    uint8_t  always0;    // Always 0
-    uint8_t  flags;      // Flags (Present, Ring 0, etc)
+    uint16_t sel;     // Kernel Segment Selector (0x08)
+    uint8_t  always0; // Always 0
+    uint8_t  flags;   // Flags (Present, Ring 0, etc)
     uint16_t base_high;
 } __attribute__((packed)) idt_entry_t;
 

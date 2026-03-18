@@ -4,10 +4,10 @@ int main() {
     print("\n==============================\n");
     print("      The Runtime Works!      \n");
     print("==============================\n");
-    
+
     print("Type something (q to quit):\n");
 
-    while(1) {
+    while (1) {
         char c = get_char();
         if (c == 'q') {
             break; // Break loop to exit

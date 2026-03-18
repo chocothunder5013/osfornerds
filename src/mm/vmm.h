@@ -15,8 +15,7 @@
 
 // Struct for a Page Directory
 // In x86, this is just an array of 1024 32-bit physical addresses (plus flags)
-typedef struct
-{
+typedef struct {
     uint32_t tablesPhysical[1024];
 } __attribute__((aligned(4096))) page_directory_t;
 // --- Core VMM API ---
@@ -27,13 +26,13 @@ void vmm_flush_tlb_entry(void *addr);
 
 // --- Multi-Process Support ---
 page_directory_t *vmm_create_address_space();
-void vmm_map_page_in_dir(page_directory_t *dir, void *phys, void *virt, int flags);
-void vmm_switch_directory(page_directory_t *dir);
+void              vmm_map_page_in_dir(page_directory_t *dir, void *phys, void *virt, int flags);
+void              vmm_switch_directory(page_directory_t *dir);
 page_directory_t *vmm_get_current_directory();
-void *vmm_get_phys(uint32_t virt); // Helper for debugging
+void             *vmm_get_phys(uint32_t virt); // Helper for debugging
 
 // Assembly Helpers
-extern void vmm_load_pd(uint32_t *addr);
+extern void     vmm_load_pd(uint32_t *addr);
 extern uint32_t get_cr3();
 
 #endif

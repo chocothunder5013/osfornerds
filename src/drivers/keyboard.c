@@ -4,55 +4,60 @@
 #include <stdbool.h>
 
 extern uint8_t inb(uint16_t port);
-bool shift_pressed = false;
-bool caps_lock = false;
+bool           shift_pressed = false;
+bool           caps_lock     = false;
+extern void    outb(uint16_t port, uint8_t val);
 
 // --- Circular Buffer ---
 #define KBD_BUFFER_SIZE 256
-char kbd_buffer[KBD_BUFFER_SIZE];
-volatile int read_ptr = 0;
+char         kbd_buffer[KBD_BUFFER_SIZE];
+volatile int read_ptr  = 0;
 volatile int write_ptr = 0;
 
 void kbd_buffer_write(char c) {
     int next_write = (write_ptr + 1) % KBD_BUFFER_SIZE;
-    if (next_write != read_ptr) { 
+    if (next_write != read_ptr) {
         kbd_buffer[write_ptr] = c;
-        write_ptr = next_write;
+        write_ptr             = next_write;
     }
 }
 
 char kbd_buffer_read() {
-    if (read_ptr == write_ptr) return 0;
-    char c = kbd_buffer[read_ptr];
+    if (read_ptr == write_ptr)
+        return 0;
+    char c   = kbd_buffer[read_ptr];
     read_ptr = (read_ptr + 1) % KBD_BUFFER_SIZE;
     return c;
 }
 
 // Lowercase / Default Map
-char kbd_US_low[128] = {
-    0,  27, '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', '\b',
-  '\t', 'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p', '[', ']', '\n',
-    0,  'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', '\'', '`',   0,
-  '\\', 'z', 'x', 'c', 'v', 'b', 'n', 'm', ',', '.', '/',   0,
-  '*', 0, ' ', 0,
-  // Maps Arrow Keys to special codes
-  [72] = 0x11, [80] = 0x12
-};
+char kbd_US_low[128] = {0, 27, '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', '\b',
+                        '\t', 'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p', '[', ']', '\n', 0,
+                        'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', '\'', '`', 0, '\\', 'z',
+                        'x', 'c', 'v', 'b', 'n', 'm', ',', '.', '/', 0, '*', 0, ' ', 0,
+                        // Maps Arrow Keys to special codes
+                        [72] = 0x11, [80] = 0x12};
 
 // Shifted Map (Symbols & Capitals)
 char kbd_US_high[128] = {
-    0,  27, '!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '_', '+', '\b',
-  '\t', 'Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P', '{', '}', '\n',
-    0,  'A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L', ':', '\"', '~',   0,
-  '|',  'Z', 'X', 'C', 'V', 'B', 'N', 'M', '<', '>', '?',   0,
-  '*', 0, ' ', 0,
+    0,    27,  '!', '@', '#', '$', '%', '^', '&', '*', '(',  ')', '_', '+',  '\b',
+    '\t', 'Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P',  '{', '}', '\n', 0,
+    'A',  'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L', ':', '\"', '~', 0,   '|',  'Z',
+    'X',  'C', 'V', 'B', 'N', 'M', '<', '>', '?', 0,   '*',  0,   ' ', 0,
 };
+
+// At the top of your file, ensure you have: extern void outb(uint16_t port, uint8_t val);
 
 void keyboard_handler() {
     uint8_t scancode = inb(0x60);
-    
+
+    // --- FIX: Acknowledge the interrupt IMMEDIATELY ---
+    // This ensures we never accidentally skip the EOI if we hit an early return.
+    outb(0x20, 0x20);
+
     // Ignore prefix bytes
-    if (scancode == 0xE0) return;
+    if (scancode == 0xE0)
+        return;
 
     // KEY RELEASED (Top bit set)
     if (scancode & 0x80) {
@@ -76,7 +81,7 @@ void keyboard_handler() {
 
     if (scancode < 128) {
         char c = 0;
-        
+
         // Logic: Shift XOR CapsLock (for letters)
         if (shift_pressed) {
             c = kbd_US_high[scancode];

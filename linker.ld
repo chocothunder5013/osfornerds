@@ -1,21 +1,31 @@
-/* linker.ld */
 ENTRY(_start)
 
 SECTIONS
 {
     . = 0x200000;
 
-    .text : {
-        *(.multiboot)   /* <--- This MUST be the first line inside .text */
+    .text ALIGN(4096) : {
+        KEEP(*(.multiboot))   /* <--- Added KEEP to protect it */
         *(.text)
     }
 
-    .data : {
+    .rodata ALIGN(4096) : {
+        *(.rodata*)
+    }
+
+    .data ALIGN(4096) : {
         *(.data)
     }
 
-    .bss : {
+    .bss ALIGN(4096) : {
         *(COMMON)
         *(.bss)
+    }
+
+    /* Throw away modern GCC junk that pushes our headers too far down */
+    /DISCARD/ : {
+        *(.note.gnu.build-id)
+        *(.comment)
+        *(.note*)
     }
 }

@@ -32,7 +32,7 @@ extern void isr44();
 extern void isr46();
 extern void isr47();
 
-idt_entry_t idt[256];
+idt_entry_t    idt[256];
 idt_register_t idt_reg;
 
 extern void keyboard_handler();
@@ -40,40 +40,35 @@ extern void schedule();
 extern void mouse_handler();
 extern void term_print(const char *str);
 
-uint32_t get_cr2()
-{
+uint32_t get_cr2() {
     uint32_t val;
     __asm__ volatile("mov %%cr2, %0" : "=r"(val));
     return val;
 }
 
-void term_print_hex(uint32_t n)
-{
+void term_print_hex(uint32_t n) {
     char *digits = "0123456789ABCDEF";
-    char str[11]; // "0x" + 8 digits + null
-    str[0] = '0';
-    str[1] = 'x';
+    char  str[11]; // "0x" + 8 digits + null
+    str[0]  = '0';
+    str[1]  = 'x';
     str[10] = '\0';
 
-    for (int i = 0; i < 8; i++)
-    {
+    for (int i = 0; i < 8; i++) {
         str[9 - i] = digits[n & 0xF];
         n >>= 4;
     }
     term_print(str);
 }
 
-void set_idt_gate(int n, uint32_t handler)
-{
-    idt[n].base_low = handler & 0xFFFF;
-    idt[n].sel = 0x08;
-    idt[n].always0 = 0;
-    idt[n].flags = 0x8E;
+void set_idt_gate(int n, uint32_t handler) {
+    idt[n].base_low  = handler & 0xFFFF;
+    idt[n].sel       = 0x08;
+    idt[n].always0   = 0;
+    idt[n].flags     = 0x8E;
     idt[n].base_high = (handler >> 16) & 0xFFFF;
 }
 
-void remap_pic()
-{
+void remap_pic() {
     outb(0x20, 0x11);
     outb(0xA0, 0x11);
     outb(0x21, 0x20);
@@ -86,9 +81,8 @@ void remap_pic()
     outb(0xA1, 0x00);
 }
 
-void init_idt()
-{
-    idt_reg.base = (uint32_t)&idt;
+void init_idt() {
+    idt_reg.base  = (uint32_t)&idt;
     idt_reg.limit = 256 * sizeof(idt_entry_t) - 1;
 
     remap_pic(); // Keep this!
@@ -127,21 +121,16 @@ void init_idt()
     __asm__ volatile("sti");
 }
 
-void isr_handler(registers_t *regs)
-{
+void isr_handler(registers_t *regs) {
     // 1. Handle CPU Exceptions (0-31)
-    if (regs->int_no < 32)
-    {
+    if (regs->int_no < 32) {
         term_print("\n[CPU EXCEPTION] Code: ");
         // You might need a number-to-string function here
         // e.g., term_print_dec(regs->int_no);
 
-        if (regs->int_no == 13)
-        {
+        if (regs->int_no == 13) {
             term_print(" General Protection Fault!\n");
-        }
-        else if (regs->int_no == 14)
-        {
+        } else if (regs->int_no == 14) {
             term_print(" Page Fault!\n");
             uint32_t faulting_addr = get_cr2();
             term_print(" CR2 (Faulting Address): ");
@@ -163,32 +152,23 @@ void isr_handler(registers_t *regs)
     }
 
     // 2. Handle IRQs (32+)
-    if (regs->int_no == 32)
-    {
+    if (regs->int_no == 32) {
         schedule();
-    }
-    else if (regs->int_no == 33)
-    {
+    } else if (regs->int_no == 33) {
         keyboard_handler();
-    }
-    else if (regs->int_no == 44)
-    {
+    } else if (regs->int_no == 44) {
         mouse_handler();
-    }
-    else if (regs->int_no == 128)
-    {
+    } else if (regs->int_no == 128) {
         syscall_handler(regs);
     }
 
-    if (regs->int_no == 46 || regs->int_no == 47)
-    {
+    if (regs->int_no == 46 || regs->int_no == 47) {
         // We can leave this empty for now, or print "Disk IRQ"
         // The important part is the ACK at the bottom of this function.
     }
 
     // ACK PIC
-    if (regs->int_no >= 32 && regs->int_no <= 47)
-    {
+    if (regs->int_no >= 32 && regs->int_no <= 47) {
         if (regs->int_no >= 40)
             outb(0xA0, 0x20);
         outb(0x20, 0x20);

@@ -17,11 +17,11 @@ struct gdt_ptr {
 } __attribute__((packed));
 
 struct gdt_entry gdt[6]; // Null, KCode, KData, UCode, UData, TSS
-struct gdt_ptr gp;
-tss_entry_t tss_entry;
+struct gdt_ptr   gp;
+tss_entry_t      tss_entry;
 
 extern void gdt_flush(uint32_t);
-extern void tss_flush(); 
+extern void tss_flush();
 
 void gdt_set_gate(int num, uint32_t base, uint32_t limit, uint8_t access, uint8_t gran) {
     gdt[num].base_low    = (base & 0xFFFF);
@@ -30,11 +30,11 @@ void gdt_set_gate(int num, uint32_t base, uint32_t limit, uint8_t access, uint8_
     gdt[num].limit_low   = (limit & 0xFFFF);
     gdt[num].granularity = ((limit >> 16) & 0x0F);
     gdt[num].granularity |= (gran & 0xF0);
-    gdt[num].access      = access;
+    gdt[num].access = access;
 }
 
 void write_tss(int num, uint16_t ss0, uint32_t esp0) {
-    uint32_t base = (uint32_t) &tss_entry;
+    uint32_t base  = (uint32_t)&tss_entry;
     uint32_t limit = sizeof(tss_entry);
 
     // TSS Descriptor
@@ -43,15 +43,16 @@ void write_tss(int num, uint16_t ss0, uint32_t esp0) {
     // 0xE9 is for Ring 3? No, TSS is a system segment.
     // Let's use 0xE9 for "Present, Ring 3, Accessed" if we want user to trigger it (rare)
     // Standard kernel TSS: 0x89 (Present, Ring 0, Type 9)
-    gdt_set_gate(num, base, limit, 0x89, 0x00); 
+    gdt_set_gate(num, base, limit, 0x89, 0x00);
 
     // Zero out
     uint8_t *p = (uint8_t *)&tss_entry;
-    for(int i=0; i<sizeof(tss_entry); i++) p[i] = 0;
+    for (int i = 0; i < sizeof(tss_entry); i++)
+        p[i] = 0;
 
-    tss_entry.ss0  = ss0; 
-    tss_entry.esp0 = esp0; 
-    
+    tss_entry.ss0  = ss0;
+    tss_entry.esp0 = esp0;
+
     // I/O Map Base > Limit disables I/O permission bitmap
     tss_entry.iomap_base = sizeof(tss_entry);
 }
@@ -89,6 +90,6 @@ void init_gdt() {
 
 // Critical: Called by scheduler to update Kernel Stack for the NEXT interrupt
 void tss_set_stack(uint32_t kss, uint32_t kesp) {
-    tss_entry.ss0 = kss;
+    tss_entry.ss0  = kss;
     tss_entry.esp0 = kesp;
 }

@@ -26,7 +26,7 @@ typedef struct {
     uint32_t config_table;
     uint32_t boot_loader_name;
     uint32_t apm_table;
-    
+
     // --- NEW: VBE / Framebuffer Info ---
     uint32_t vbe_control_info;
     uint32_t vbe_mode_info;

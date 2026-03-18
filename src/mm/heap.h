@@ -4,8 +4,8 @@
 #include <stdint.h>
 #include <stddef.h>
 
-void init_heap();
-void* kmalloc(size_t size);
-void kfree(void* ptr);
+void  init_heap();
+void *kmalloc(size_t size);
+void  kfree(void *ptr);
 
 #endif

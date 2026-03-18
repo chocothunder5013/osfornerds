@@ -31,7 +31,13 @@ extern kmain
 
 _start:
     mov esp, stack_top
-    push ebx ; Push Multiboot Info Struct pointer
+    
+    ; Push eax and ebx, plus some dummy padding to maintain 16-byte alignment
+    ; esp is currently 16-byte aligned.
+    sub esp, 8      ; Padding
+    push eax        ; Multiboot Magic Number
+    push ebx        ; Multiboot Info Struct pointer
+    
     cli
     call kmain
 .hang:

@@ -2,7 +2,7 @@
 
 int main() {
     char name[32];
-    int idx = 0;
+    int  idx = 0;
 
     print("\n--- Files ---\n"); // printf -> print
     while (readdir(idx, name) == 1) {
