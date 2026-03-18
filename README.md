@@ -1,4 +1,4 @@
-# MyOS
+# osfornerds
 
 A custom, bare-metal 32-bit x86 operating system written in C and Assembly. This project features a graphical window manager, cooperative multitasking, custom PS/2 device drivers, and a standalone userland environment bootstrapped via the Multiboot1 protocol.
 
