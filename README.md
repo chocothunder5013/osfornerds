@@ -27,8 +27,8 @@ The project uses GNU Make to orchestrate the compilation of the kernel, the asse
 
 1.  **Clone the repository:**
     ```bash
-    git clone <your-repository-url>
-    cd <repository-directory>
+    git clone [<your-repository-url>](https://github.com/chocothunder5013/osfornerds.git)
+    cd osfornerds
     ```
 
 2.  **Build the OS and generate the ISO:**
