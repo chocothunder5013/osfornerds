@@ -1,19 +1,21 @@
-/* src/drivers/vga.c */
 #include <stdint.h>
 #include <stddef.h>
 #include "serial.h"
 #include "vga.h"
-
-// Video Memory
 volatile uint16_t *vga_buffer = (uint16_t *)0xB8000;
 const int          VGA_COLS   = 80;
 const int          VGA_ROWS   = 25;
+int                term_col   = 0;
+int                term_row   = 0;
+uint8_t            term_color = 0x0F;
 
-int     term_col   = 0;
-int     term_row   = 0;
-uint8_t term_color = 0x0F;
-
-void vga_update_cursor(int x, int y) {
+/*
+ * Updates the hardware cursor position on the VGA display.
+ * Interacts with the VGA CRT controller registers via I/O ports 0x3D4 (index) 
+ * and 0x3D5 (data). We calculate the linear offset from the (x, y) coordinates 
+ * and send it in two 8-bit pieces (high byte, then low byte).
+ */
+void               vga_update_cursor(int x, int y) {
     uint16_t pos = y * VGA_COLS + x;
     outb(0x3D4, 0x0F);
     outb(0x3D5, (uint8_t)(pos & 0xFF));
@@ -21,6 +23,11 @@ void vga_update_cursor(int x, int y) {
     outb(0x3D5, (uint8_t)((pos >> 8) & 0xFF));
 }
 
+/*
+ * Clears the VGA text buffer by iterating over every cell (row, col) 
+ * and writing a space character with the default terminal color. 
+ * Resets the internal position trackers and the hardware cursor to (0,0).
+ */
 void vga_clear() {
     for (int col = 0; col < VGA_COLS; col++) {
         for (int row = 0; row < VGA_ROWS; row++) {
@@ -33,6 +40,12 @@ void vga_clear() {
     vga_update_cursor(0, 0);
 }
 
+/*
+ * Scrolls the terminal text up by one row.
+ * Copies the contents of each row to the row above it, starting from row 1.
+ * The bottom row is then cleared by filling it with spaces, and the 
+ * internal row tracker is updated to point to this new blank row.
+ */
 void vga_scroll() {
     for (int row = 1; row < VGA_ROWS; row++) {
         for (int col = 0; col < VGA_COLS; col++) {
@@ -48,6 +61,13 @@ void vga_scroll() {
     term_row = VGA_ROWS - 1;
 }
 
+/*
+ * Outputs a single character to the VGA buffer.
+ * Processes control characters: newline ('\n') advances to the next row, 
+ * backspace ('\b') moves the cursor back and erases the character. 
+ * Regular characters are written directly to the memory-mapped VGA buffer 
+ * at 0xB8000. Handles line wrapping and scrolling when the screen is full.
+ */
 void vga_putc(char c) {
     if (c == '\n') {
         term_col = 0;
@@ -62,7 +82,6 @@ void vga_putc(char c) {
         vga_buffer[index] = ((uint16_t)term_color << 8) | c;
         term_col++;
     }
-
     if (term_col >= VGA_COLS) {
         term_col = 0;
         term_row++;
@@ -70,10 +89,13 @@ void vga_putc(char c) {
     if (term_row >= VGA_ROWS) {
         vga_scroll();
     }
-
     vga_update_cursor(term_col, term_row);
 }
 
+/*
+ * Loops through a null-terminated string, printing each character
+ * sequentially using vga_putc.
+ */
 void vga_print(const char *str) {
     for (int i = 0; str[i] != '\0'; i++) {
         vga_putc(str[i]);

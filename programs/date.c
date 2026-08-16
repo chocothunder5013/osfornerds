@@ -1,11 +1,23 @@
 #include "stdlib.h"
 
+/*
+ * date program
+ * 
+ * Retrieves the current system time using a system call and prints it
+ * to the screen in a formatted string.
+ */
+
+// Entry point for the date program.
 int main() {
     time_t t;
+    
+    // Retrieve the current time from the system via the get_time() system call wrapper.
     get_time(&t);
-
-    print("\nCurrent System Time:\n");
-
+    
+    // Output the formatted time.
+    print("
+Current System Time:
+");
     print("20");
     print_int(t.year - 2000);
     print("/");
@@ -16,7 +28,7 @@ int main() {
     print_int(t.hour);
     print(":");
     print_int(t.minute);
-
-    print("\n");
+    print("
+");
     return 0;
 }

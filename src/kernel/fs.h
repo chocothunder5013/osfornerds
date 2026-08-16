@@ -1,9 +1,11 @@
 #ifndef FS_H
 #define FS_H
-
 #include <stdint.h>
-
-// Struct Definitions
+/*
+ * Represents a node in the in-memory Virtual File System (VFS).
+ * It can act as either a file (holding a data buffer) or a directory (holding children).
+ * The filesystem is structured as a tree using 'parent', 'children', and 'next' sibling pointers.
+ */
 typedef struct file_node {
     char              name[32];
     char             *data;
@@ -13,13 +15,8 @@ typedef struct file_node {
     struct file_node *children;
     struct file_node *next;
 } file_t;
-
-extern file_t *fs_root; // Extern declaration
-
-// Function Prototypes
-void    init_fs(void *mboot_ptr); // Use void* to avoid circular include dep
-file_t *fs_resolve_path(const char *path);
-void    fs_delete(const char *name);
-// ... Add prototypes for fs_read, fs_write, etc.
-
+extern file_t *fs_root;
+void           init_fs(void *mboot_ptr);
+file_t        *fs_resolve_path(const char *path);
+void           fs_delete(const char *name);
 #endif

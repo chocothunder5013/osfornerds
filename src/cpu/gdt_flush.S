@@ -1,38 +1,32 @@
-    ; src/cpu/gdt_flush.S
+    ; GDT & TSS Register Flush Assembly Routine
+    ; Reloads GDTR, updates segment registers (DS, ES, FS, GS, SS), flushes CS via far jump, and loads TR.
 global gdt_flush
 global tss_flush
 
-    ; ---------------------------------------------------
-    ; gdt_flush(uint32_t gdt_ptr)
-    ; Reloads the GDT and segment registers.
-; EXPECTS:
-    ;   GDT Entry 1 (0x08) = Kernel Code
-    ;   GDT Entry 2 (0x10) = Kernel Data
-    ; ---------------------------------------------------
+    ; Reloads GDTR and updates segment selectors to kernel data (0x10) and code (0x08).
+    ; This must be done in assembly because the CPU's segment registers cannot be directly
+    ; manipulated using standard C code, and the CS register requires a far jump to update.
 gdt_flush:
-    mov eax, [esp+4]    ; Get the pointer argument
-    lgdt [eax]          ; Load the GDT Register
+    mov eax, [esp+4]    ; Load GDT pointer argument from stack
+    lgdt [eax]          ; Reload GDTR register with the new table
 
-    mov ax, 0x10        ; Offset 0x10 (Entry 2) -> Kernel Data Segment
+    ; Update all data segment registers to use the Kernel Data Segment (offset 0x10 in the GDT).
+    mov ax, 0x10        
     mov ds, ax
     mov es, ax
     mov fs, ax
     mov gs, ax
     mov ss, ax
 
-    ; Perform a Far Jump to flush the pipeline and reload CS
-    jmp 0x08:.flush     ; Offset 0x08 (Entry 1) -> Kernel Code Segment
+    ; Perform a far jump to update the Code Segment (CS) register.
+    ; This flushes the CPU instruction pipeline and sets CS to the Kernel Code Segment (offset 0x08).
+    jmp 0x08:.flush     
 .flush:
     ret
 
-    ; ---------------------------------------------------
-    ; tss_flush()
-    ; Loads the Task Register (TR).
-    ; Required for User Mode context switching.
-; EXPECTS:
-    ;   GDT Entry 5 (0x28) = TSS Entry
-    ; ---------------------------------------------------
+    ; Loads the Task Register (TR) with the Task State Segment (TSS) descriptor.
+    ; This tells the CPU where to find the kernel stack when transitioning from user mode to kernel mode.
 tss_flush:
-    mov ax, 0x28        ; Index 5 * 8 bytes = 40 = 0x28
+    mov ax, 0x28        ; Selector 0x28 points to the 5th entry in the GDT (the TSS).
     ltr ax              ; Load Task Register
     ret

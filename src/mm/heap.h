@@ -1,6 +1,10 @@
+/*
+ * Kernel Heap Manager API
+ *
+ * Provides the interface for dynamic memory allocation within the kernel.
+ */
 #ifndef HEAP_H
 #define HEAP_H
-
 #include <stdint.h>
 #include <stddef.h>
 

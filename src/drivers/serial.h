@@ -1,20 +1,26 @@
-/* src/drivers/serial.h */
 #ifndef SERIAL_H
 #define SERIAL_H
-
 #include <stdint.h>
 
-// Initialize the serial port
-void init_serial();
+/*
+ * Initializes the COM1 serial port for 8N1 communication.
+ * Configures the UART (Universal Asynchronous Receiver-Transmitter) speed,
+ * enables FIFOs, and sets up interrupt line parameters.
+ */
+void    init_serial();
 
-// Write a string to the serial port
-void serial_log(char *str);
+/*
+ * Transmits a null-terminated string to the serial port.
+ * Useful for kernel-level debugging and log output without relying on VGA.
+ */
+void    serial_log(char *str);
 
-// Write a single character
-void serial_write_char(char c);
+/*
+ * Writes a single character to the serial port.
+ * Waits for the transmit buffer to empty before sending.
+ */
+void    serial_write_char(char c);
 
-// I/O Port wrappers (used by IDT and others)
 void    outb(uint16_t port, uint8_t val);
 uint8_t inb(uint16_t port);
-
 #endif

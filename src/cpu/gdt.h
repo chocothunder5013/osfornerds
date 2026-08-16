@@ -1,17 +1,24 @@
-/* src/cpu/gdt.h */
+/*
+ * Global Descriptor Table API
+ *
+ * Exposes functions to initialize the GDT and update the Task State Segment (TSS).
+ * Includes the full x86 hardware TSS structure definition.
+ */
 #ifndef GDT_H
 #define GDT_H
 #include <stdint.h>
 
 void init_gdt();
 
-// A struct describing a Task State Segment.
+// Task State Segment (TSS) Structure.
+// The CPU uses this primarily during hardware task switching (which modern OSes avoid)
+// or when switching privilege levels (e.g., handling an interrupt from ring 3 to ring 0).
+// In a modern OS, we mostly only care about updating esp0 and ss0 when context switching.
 typedef struct {
-    uint32_t prev_tss; // The previous TSS - if we used hardware task switching this would form a
-                       // linked list.
-    uint32_t esp0;     // The stack pointer to load when we change to kernel mode.
-    uint32_t ss0;      // The stack segment to load when we change to kernel mode.
-    uint32_t esp1;     // Unused...
+    uint32_t prev_tss;
+    uint32_t esp0;       // Kernel stack pointer used during ring 3 -> ring 0 transition
+    uint32_t ss0;        // Kernel stack segment
+    uint32_t esp1;
     uint32_t ss1;
     uint32_t esp2;
     uint32_t ss2;
@@ -34,10 +41,9 @@ typedef struct {
     uint32_t gs;
     uint32_t ldt;
     uint16_t trap;
-    uint16_t iomap_base;
+    uint16_t iomap_base; // Offset to the I/O permission bit map
 } __attribute__((packed)) tss_entry_t;
 
-// Update TSS ESP0 (Called by the scheduler)
-void tss_set_stack(uint32_t kss, uint32_t kesp);
+void                      tss_set_stack(uint32_t kss, uint32_t kesp);
 
 #endif

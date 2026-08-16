@@ -1,8 +1,10 @@
 #ifndef MULTIBOOT_H
 #define MULTIBOOT_H
-
 #include <stdint.h>
-
+/*
+ * Represents a loaded boot module provided by the bootloader (e.g., an initial ramdisk).
+ * Contains the physical memory boundaries of the module and an optional command line string.
+ */
 typedef struct {
     uint32_t mod_start;
     uint32_t mod_end;
@@ -10,6 +12,11 @@ typedef struct {
     uint32_t reserved;
 } multiboot_module_t;
 
+/*
+ * The main Multiboot information structure passed by the bootloader to the kernel.
+ * It contains hardware details, memory availability, video framebuffer information,
+ * and addresses of loaded modules. The 'flags' field indicates which fields are valid.
+ */
 typedef struct {
     uint32_t flags;
     uint32_t mem_lower;
@@ -26,15 +33,12 @@ typedef struct {
     uint32_t config_table;
     uint32_t boot_loader_name;
     uint32_t apm_table;
-
-    // --- NEW: VBE / Framebuffer Info ---
     uint32_t vbe_control_info;
     uint32_t vbe_mode_info;
     uint16_t vbe_mode;
     uint16_t vbe_interface_seg;
     uint16_t vbe_interface_off;
     uint16_t vbe_interface_len;
-
     uint64_t framebuffer_addr;
     uint32_t framebuffer_pitch;
     uint32_t framebuffer_width;
@@ -43,6 +47,10 @@ typedef struct {
     uint8_t  framebuffer_type;
 } multiboot_info_t;
 
+/*
+ * Describes a single region of physical memory provided by the BIOS memory map.
+ * The 'type' field indicates if the memory is available (1) or reserved (other values).
+ */
 typedef struct {
     uint32_t size;
     uint32_t addr_low;
@@ -51,5 +59,4 @@ typedef struct {
     uint32_t len_high;
     uint32_t type;
 } __attribute__((packed)) multiboot_memory_map_t;
-
 #endif

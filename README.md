@@ -1,81 +1,91 @@
-# osfornerds
+# OSForNerds
 
-A custom, bare-metal 32-bit x86 operating system written in C and Assembly. This project features a graphical window manager, cooperative multitasking, custom PS/2 device drivers, and a standalone userland environment bootstrapped via the Multiboot1 protocol.
+![C](https://img.shields.io/badge/C-00599C?style=for-the-badge&logo=c&logoColor=white)
+![Assembly](https://img.shields.io/badge/Assembly-100000?style=for-the-badge)
+![Limine](https://img.shields.io/badge/Limine-Bootloader-4CAF50?style=for-the-badge)
+![QEMU](https://img.shields.io/badge/QEMU-Tested-FF6600?style=for-the-badge)
 
-## Features
+OSForNerds is a 32-bit x86 monolithic kernel and operating system built from scratch. It has a preemptive multitasking scheduler, virtual memory isolation, a custom flat virtual file system (VFS), and a hardware-accelerated compositing window manager for executing Ring 3 ELF binaries.
 
-* **Bootloader:** Bootstrapped using Limine (v8.x) via the Multiboot1 protocol.
-* **Memory Management:** Implements Physical Memory Management (PMM), Virtual Memory Management (VMM) with paging, and a custom linked-list kernel heap (`kmalloc`/`kfree`).
-* **Multitasking:** Custom scheduler managing Ring 0 kernel threads and process states (Ready, Blocked, Zombie) with cooperative yielding.
-* **Graphical User Interface:** Utilizes VBE linear framebuffers. Features a double-buffered compositor, a basic window manager, and 8x8 VGA bitmap font rendering.
-* **Hardware Drivers:** Custom PS/2 Keyboard and Mouse drivers with hardware interrupt handling (PIC/IDT), scancode translation, and packet synchronization.
-* **Userland:** Includes a custom standard library (`stdlib.c`) handling system calls (via `int 0x80`), and a suite of modular programs (Shell, Text Editor, File Utilities) loaded into memory as Multiboot modules.
+![OS Screenshot Placeholder](https://via.placeholder.com/800x400.png?text=Replace+this+with+a+screenshot+of+your+OS+running+in+QEMU)
 
-## Prerequisites
+---
 
-To build and run the operating system, you will need a Linux environment (or WSL) with the following dependencies installed. The build system uses the host GCC compiler with multilib support for 32-bit cross-compilation.
+## Technical Highlights
 
-**Debian / Ubuntu:**
+* **Preemptive Multitasking:** Round-robin scheduling driven by hardware interrupts, managing Ring 0 threads and Ring 3 userland processes.
+* **Memory Isolation:** Two-tier paging system (VMM) providing per-process isolated virtual address spaces and a robust kernel heap (`kmalloc`/`kfree`) with dynamic coalescing.
+* **Custom GUI Compositor:** A double-buffered, hardware-accelerated window manager that eliminates screen tearing, featuring floating overlapping windows and a dynamic 8x8 font renderer.
+* **Flat Virtual Filesystem:** A RAM-cached, hierarchal VFS backed by an ATA PIO disk driver for persistent sector-level storage.
+* **Ring 3 Userland:** Executes standard 32-bit ELF binaries linked against a custom standard library, communicating with the kernel via a definitive `INT 0x80` syscall ABI.
+
+---
+
+## Getting Started
+
+### 1. Install Dependencies
+Ensure you have the required 32-bit compilation tools, NASM, and QEMU installed.
+
+**Debian / Ubuntu / WSL:**
 ```bash
 sudo apt update
 sudo apt install build-essential nasm xorriso qemu-system-x86 qemu-utils git mtools gcc-multilib
+
 ```
 
-## Build and Installation
+**Fedora / RHEL:**
 
-The project uses GNU Make to orchestrate the compilation of the kernel, the assembly of user programs, the fetching of the bootloader, and the generation of the bootable ISO.
+```bash
+sudo dnf update
+sudo dnf install make gcc nasm xorriso qemu-system-x86 qemu-img git mtools glibc-devel.i686 libgcc.i686
 
-1.  **Clone the repository:**
-    ```bash
-    git clone https://github.com/chocothunder5013/osfornerds.git
-    cd osfornerds
-    ```
+```
 
-2.  **Build the OS and generate the ISO:**
-    ```bash
-    make all
-    ```
-    *This command compiles the kernel, builds the user programs into ELF binaries, clones the Limine bootloader, and packages everything into `my-os.iso`.*
+### 2. Build & Run
 
-3.  **Run in QEMU:**
-    ```bash
-    make run
-    ```
+The `Makefile` handles fetching the Limine bootloader, compiling the kernel and userland, generating the filesystem disk, and creating the bootable ISO.
 
-4.  **Clean the build environment:**
-    ```bash
-    make clean
-    ```
+```bash
+# Compile everything and build the ISO
+make all
 
-## Operation
+# Launch the OS in QEMU
+make run
 
-Upon execution, QEMU will launch and the Limine bootloader will load the kernel and userland modules into memory. The kernel will initialize the Global Descriptor Table (GDT), Interrupt Descriptor Table (IDT), memory allocators, and hardware drivers before handing control to the multitasking scheduler.
+```
 
-The OS defaults to a graphical desktop environment displaying a central terminal window. 
+> **Note:** System logs and CPU state dumps (including IDT segfault captures) are piped directly to `serial.log` and `qemu.log` in the root directory.
 
-### Shell Commands
-The default shell task supports the following commands:
-* `help` - Display available commands.
-* `ls [path]` - List directory contents.
-* `cd <path>` - Change current working directory.
-* `pwd` - Print working directory.
-* `cat <file>` - Print file contents to the terminal.
-* `touch <file>` - Create a new file.
-* `mkdir <name>` - Create a new directory.
-* `rm <file>` - Delete a file.
-* `clear` - Clear the terminal screen.
-* `<program_name>` - Execute a userland ELF binary (e.g., `hello.elf`, `kedit.elf`).
+---
 
-### System Logs
-The Makefile is configured to output kernel debugging information over the serial port. You can monitor the system state in real-time by inspecting the generated `serial.log` and `qemu.log` files in the root directory.
+## Architecture & Documentation
 
-## Project Structure
+Read more about the OS architecture:
 
-* `src/kernel/` - Core initialization, multitasking scheduler, syscall interface, and virtual filesystem.
-* `src/cpu/` - x86 architecture specifics (GDT, IDT, ISRs).
-* `src/mm/` - Memory management (PMM, VMM, Heap).
-* `src/drivers/` - Hardware interaction (ATA, PS/2 Keyboard/Mouse, VGA, Serial).
-* `src/gui/` - Window manager, compositor, and font rendering.
-* `programs/` - Userland C applications, assembly entry points, and the custom standard library.
-* `limine.conf` - Bootloader configuration specifying the kernel and Multiboot modules.
-* `linker.ld` - Kernel linker script ensuring proper memory alignment and Multiboot header placement.
+* **[System Architecture & Boot Sequence](./docs/architecture.md)**
+* **[Window Manager & Compositor](./docs/window_manager.md)**
+* **[Filesystem & ATA Storage](./docs/filesystem.md)**
+* **[System Call (Syscall) API](./docs/syscalls.md)**
+
+---
+
+## Userland Environment
+
+OSForNerds boots into a graphical terminal hosting an interactive shell. It supports standard built-in commands and executes ELF binaries natively from disk.
+
+| Command | Description |
+| --- | --- |
+| `ls [path]` | Lists directory contents. |
+| `cd <path>` | Changes current working directory. |
+| `cat <file>` | Prints text file contents to the terminal. |
+| `mkdir <name>` | Creates a new directory on the VFS. |
+| `rm <file>` | Deletes a file. |
+| `<program.elf>` | Executes a userland binary (e.g., `sysmon.elf`, `kedit.elf`). |
+
+### Diagnostic Suites
+
+The userland includes built-in stress-testing tools:
+
+* `sysmon.elf`: A graphical resource monitor tracking uptime, task counts, and live memory usage.
+* `stress.elf`: A chaos suite that runs CPU burners and memory leaks to test the kernel's **OOM Killer**.
+* `crash.elf`: Purposefully triggers a Ring 3 Segmentation Fault to test IDT protection.
